@@ -32,6 +32,7 @@ import {
     useSidebar,
 } from "@/components/ui/sidebar"
 import { ChangePasswordModal } from "@/modules/shared/change-password/components/ChangePasswordModal"
+import { NotificationBell } from "@/components/shared/notification-bell"
 
 type NavUserProps = {
     user: {
@@ -107,7 +108,8 @@ export function NavUser({ user, onLogout, subsystemSlug }: NavUserProps) {
     }, [loggingOut, onLogout, router])
 
     return (
-        <SidebarMenu>
+        <div className="flex h-full items-center gap-2">
+            <SidebarMenu>
             <SidebarMenuItem>
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -179,7 +181,7 @@ export function NavUser({ user, onLogout, subsystemSlug }: NavUserProps) {
                                 </Link>
                             </DropdownMenuItem>
 
-                                                        <DropdownMenuItem
+                            <DropdownMenuItem
                                 className="cursor-pointer"
                                 onSelect={(e) => {
                                     e.preventDefault()
@@ -190,7 +192,7 @@ export function NavUser({ user, onLogout, subsystemSlug }: NavUserProps) {
                                 Salesman Rankings
                             </DropdownMenuItem>
 
-<DropdownMenuItem asChild>
+                            <DropdownMenuItem asChild>
                                 <Link href={`/${currentSlug}/settings`} className="cursor-pointer">
                                     <Settings className="mr-2 size-4" />
                                     Settings
@@ -221,6 +223,8 @@ export function NavUser({ user, onLogout, subsystemSlug }: NavUserProps) {
                 onOpenChange={setIsPasswordModalOpen}
             />
         </SidebarMenu>
+            <NotificationBell />
+        </div>
     )
 }
 

@@ -13,6 +13,7 @@ import { motion } from "framer-motion";
 import { CommandPalette } from "@/components/main-dashboard/command-palette";
 import { UserMenu } from "@/components/main-dashboard/user-menu";
 import { AnnouncementModal } from "@/components/main-dashboard/announcement-modal";
+import { NotificationBell } from "@/components/shared/notification-bell";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -350,6 +351,7 @@ export default function MainDashboardClient({
                                 <CommandPalette subsystems={resolvedSubsystems} />
                             </div>
                             <UserMenu fullName={userFullName} email={userEmail} isDealerOver={isDealerOver} />
+                            <NotificationBell />
                         </div>
                     </div>
                 </div>
