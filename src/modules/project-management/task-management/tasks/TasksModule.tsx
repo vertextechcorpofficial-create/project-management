@@ -12,7 +12,6 @@ import { SubtaskCreateDialog } from "./components/SubtaskCreateDialog";
 import { TaskDetailSheet } from "./components/TaskDetailSheet";
 import { TaskFormDialog, type TaskBreadcrumb } from "./components/TaskFormDialog";
 import { TaskListSwitcher } from "./components/TaskListSwitcher";
-import { DEFAULT_TASK_PAGE_SIZE, TaskPagination } from "./components/TaskPagination";
 import { TaskTree } from "./components/TaskTree";
 import { SortableTaskRow } from "./components/tree-dnd/SortableTaskRow";
 import { TreeDndProvider } from "./components/tree-dnd/TreeDndProvider";
@@ -416,13 +415,6 @@ export function TasksModule({ userId }: TasksModuleProps) {
      * keeps picking a field from blanking the list.
      */
     const { search, groups, onSearchChange, onGroupsChange, clearFilters } = useTaskFilterState();
-    const [page, setPage] = useState(1);
-    /**
-     * Roots per page. It is an INPUT to the page set, so changing it resets to page 1 exactly as a
-     * search or filter change does — staying on page 3 of a set that now has two pages is the bug
-     * this guards against. The choices and the default live with the pager.
-     */
-    const [pageSize, setPageSize] = useState<number>(DEFAULT_TASK_PAGE_SIZE);
 
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     /** Which of the six views is showing. The list is the default and the only editable one. */
@@ -611,38 +603,17 @@ export function TasksModule({ userId }: TasksModuleProps) {
     }, [isFiltering, autoExpandedIds, expandableRootIds, renderExpandedIds]);
 
     /**
-     * Every row the tree can render, in render order: the filtered forest with the active expansion
-     * state applied. This is the pagination unit — the SAME flattened list `TaskTree` paints (it is
-     * handed `pagedRows` below), so the page count, the slice and the footer all count rows, never
-     * roots.
+     * Every row the tree renders, in render order: the filtered forest with the active expansion
+     * state applied. `TaskTree` paints exactly this list — the table is not sliced any more.
      */
     const visibleRows = useMemo(
         () => flattenVisible(filteredRoots, renderExpandedIds),
         [filteredRoots, renderExpandedIds],
     );
 
-    const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
-    /*
-     * The page is CLAMPED at read time rather than written back through an effect: `page` may hold a
-     * stale number for one render after the set shrinks, but every consumer — the slice and the
-     * pager — reads this clamped value, so a deleted, filtered-away or newly-collapsed page can
-     * never strand the user on an empty page. Expanding/collapsing changes the ROW count and so the
-     * page count, which this clamp also covers. Every input change resets `page` to 1, so the stale
-     * value is unobservable.
-     */
-    const currentPage = Math.min(page, totalPages);
-
-    // The slice is taken over RENDERED ROWS, so a page boundary can fall inside a subtree. The rows
-    // keep the true `depth` `buildTree` gave them, so indentation stays right on a mid-subtree page.
-    const pagedRows = useMemo(
-        () => visibleRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-        [visibleRows, currentPage, pageSize],
-    );
-
     const handleSearchChange = useCallback(
         (value: string) => {
             onSearchChange(value);
-            setPage(1);
         },
         [onSearchChange],
     );
@@ -650,7 +621,6 @@ export function TasksModule({ userId }: TasksModuleProps) {
     const handleGroupsChange = useCallback(
         (next: readonly FilterGroup[]) => {
             onGroupsChange(next);
-            setPage(1);
         },
         [onGroupsChange],
     );
@@ -659,14 +629,12 @@ export function TasksModule({ userId }: TasksModuleProps) {
     const handleApplySavedFilter = useCallback(
         (filter: SavedTaskFilter) => {
             onGroupsChange(cloneGroupsForApply(filter.groups));
-            setPage(1);
         },
         [onGroupsChange],
     );
 
     const handleClearFilters = useCallback(() => {
         clearFilters();
-        setPage(1);
     }, [clearFilters]);
 
     /**
@@ -732,22 +700,6 @@ export function TasksModule({ userId }: TasksModuleProps) {
         [items, moveTask, refresh],
     );
 
-    const handlePageChange = useCallback(
-        (next: number) => {
-            setPage(Math.max(1, Math.min(next, totalPages)));
-        },
-        [totalPages],
-    );
-
-    /**
-     * A page-size change is an input change, so it lands on page 1 — the old size's page indices
-     * mean nothing under the new one.
-     */
-    const handlePageSizeChange = useCallback((next: number): void => {
-        setPageSize(next);
-        setPage(1);
-    }, []);
-
     /**
      * The create seam the toolbar calls. Landing the dialog changes nothing about that contract: it
      * still just opens the create form.
@@ -757,13 +709,10 @@ export function TasksModule({ userId }: TasksModuleProps) {
     }, []);
 
     /**
-     * The switcher's selection seam. The resolved fallback stays derived, never stored, and the page
-     * lands on 1 exactly as it does for a search or filter change — the new list's rows have nothing
-     * to do with the old page index.
+     * The switcher's selection seam. The resolved fallback stays derived, never stored.
      */
     const handleSelectList = useCallback((id: number): void => {
         setSelectedListId(id);
-        setPage(1);
     }, []);
 
     /**
@@ -1132,7 +1081,7 @@ export function TasksModule({ userId }: TasksModuleProps) {
             >
                 <TaskTree
                 roots={filteredRoots}
-                rows={pagedRows}
+                rows={visibleRows}
                 contextIds={contextIds}
                 renderRow={SortableRow}
                 expandedIds={renderExpandedIds}
@@ -1155,23 +1104,6 @@ export function TasksModule({ userId }: TasksModuleProps) {
                 aria-label="Task list"
             />
             </TreeDndProvider>
-
-            {/*
-             * The pager is pinned BELOW the tree and outside its horizontal-scroll container, so one
-             * pager drives both the wide table and the narrow card layout and never scrolls out of
-             * reach. It is withheld entirely while loading, on error, or when the filtered set is
-             * empty — an empty list shows the existing empty state, never "Page 1 of 0".
-             */}
-            {!isLoading && !showError && visibleRows.length > 0 ? (
-                <TaskPagination
-                    page={currentPage}
-                    totalPages={totalPages}
-                    totalRows={visibleRows.length}
-                    pageSize={pageSize}
-                    onPageChange={handlePageChange}
-                    onPageSizeChange={handlePageSizeChange}
-                />
-            ) : null}
             </div>
 
             <TaskFormDialog

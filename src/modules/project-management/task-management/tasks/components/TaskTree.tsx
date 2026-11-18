@@ -109,13 +109,6 @@ function buildColumns(fields: readonly TaskField[]): TaskTreeColumn[] {
     ];
 }
 
-/**
- * The table's `min-width` floor. The table is `table-fixed`, so its columns cannot shrink below the
- * resolved width sum; keeping a floor stops the whole grid from collapsing when every column is
- * dragged to its minimum, and keeps horizontal scrolling correct as columns grow.
- */
-const TASK_TABLE_MIN_WIDTH_PX = 1120;
-
 interface SiblingPosition {
     posInSet: number;
     setSize: number;
@@ -321,13 +314,46 @@ export function TaskTree({
     );
 
     /**
-     * The table's minimum width is the SUM of the resolved widths (with a floor): the table is
-     * `table-fixed`, so this is what keeps a widened column from squeezing its neighbours and what
-     * makes the horizontal scrollbar appear exactly when the grid no longer fits.
+     * Widths are stored in pixels but rendered as SHARES of the row, so the grid always fits its
+     * container. A horizontal scroll box would be the sticky labels' scrollport, and they would
+     * ride away with the rows; fitting instead keeps every column on screen. Dragging a boundary
+     * still changes how much of the row that column takes.
      */
-    const tableMinWidth = useMemo(
-        () => Math.max(TASK_TABLE_MIN_WIDTH_PX, columns.reduce((sum, column) => sum + widthOf(column.key), 0)),
-        [columns, widthOf],
+    const columnWidthPercent = useMemo(() => {
+        const total = columns.reduce((sum, column) => sum + widthOf(column.key), 0);
+        return new Map(
+            columns.map((column) => [column.key, (widthOf(column.key) / total) * 100] as const),
+        );
+    }, [columns, widthOf]);
+
+    const columnLabelByKey = useMemo(
+        () => new Map(columns.map((column) => [column.key, column.label] as const)),
+        [columns],
+    );
+
+    /**
+     * The SAME handle the header draws, repeated inside the TASK NAME cell so the boundary is
+     * grabbable where the rows are — the header scrolls away, and users reach for the line they see.
+     * Only that one column: every other body boundary would be a permanent rule the grid never had.
+     * Pointer-only: one tab stop per cell per row would bury every other control in the table.
+     */
+    const renderColumnResizeHandle = useCallback(
+        (columnKey: string): ReactNode => {
+            if (columnKey !== "title") return null;
+            return (
+                <ColumnResizeHandle
+                    columnKey={columnKey}
+                    label={columnLabelByKey.get(columnKey) ?? columnKey}
+                    width={widthOf(columnKey)}
+                    minWidth={minTaskColumnWidth(columnKey)}
+                    onResize={handleColumnResize}
+                    onResizeCommit={handleColumnResizeCommit}
+                    isKeyboardReachable={false}
+                    tone="cell"
+                />
+            );
+        },
+        [columnLabelByKey, widthOf, handleColumnResize, handleColumnResizeCommit],
     );
 
     /**
@@ -565,7 +591,11 @@ export function TaskTree({
                 )}
             </div>
 
-            <div className="hidden overflow-x-auto xl:block">
+            {/* The labels pin against the WINDOW, and the rows scroll with the page — no inner scroll
+                box. That needs no scrollport between the header and the viewport, so the shared
+                `Table`'s own `overflow-x-auto` container is neutralised here; a wide table then
+                scrolls horizontally with the page like any other content. */}
+            <div className="hidden xl:block [&_[data-slot=table-container]]:overflow-visible">
                 <div className="isolate rounded-2xl border border-border/50 bg-card shadow-sm">
                     {/*
                      * `table-fixed` makes the `<colgroup>` the single source of column geometry, so
@@ -576,11 +606,13 @@ export function TaskTree({
                         role="treegrid"
                         aria-label={ariaLabel}
                         className="table-fixed"
-                        style={{ minWidth: tableMinWidth }}
                     >
                         <colgroup>
                             {columns.map((column) => (
-                                <col key={column.key} style={{ width: `${widthOf(column.key)}px` }} />
+                                <col
+                                    key={column.key}
+                                    style={{ width: `${(columnWidthPercent.get(column.key) ?? 0).toFixed(4)}%` }}
+                                />
                             ))}
                         </colgroup>
                         <TableHeader className="bg-muted/30">
@@ -597,9 +629,13 @@ export function TaskTree({
                                             style={frozenLeft === undefined ? undefined : { left: frozenLeft }}
                                             className={cn(
                                                 // `sticky` is a positioned box, so it anchors the resize
-                                                // handle just as the old `relative` did; only a scrolling
-                                                // header cell still needs `relative`.
-                                                frozenLeft === undefined ? "relative" : FROZEN_HEADER_CELL_CLASS,
+                                                // handle just as the old `relative` did. Every header cell
+                                                // is pinned vertically as well — the labels stay on screen
+                                                // when the table scrolls — and carries its own background or
+                                                // the rows would show through it.
+                                                frozenLeft === undefined
+                                                    ? "sticky -top-4 z-20 bg-[color-mix(in_srgb,hsl(var(--muted))_30%,hsl(var(--card)))]"
+                                                    : FROZEN_HEADER_CELL_CLASS,
                                                 frozenLeft !== undefined &&
                                                     columnKey === lastFrozenColumnKey &&
                                                     FROZEN_EDGE_CLASS,
@@ -661,6 +697,7 @@ export function TaskTree({
                                               onCommitCellEdit,
                                               onEditTags,
                                               onAddSubtask,
+                                              renderColumnResizeHandle,
                                           };
                                           const rendered = renderRow
                                               ? renderRow(rowProps)

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The task table's frozen leading columns: the expand gutter and the task title, pinned to the left
  * edge and scrolling together as ONE block.
  *
@@ -73,8 +73,13 @@ export const FROZEN_EDGE_CLASS = "shadow-[inset_-1px_0_0_0_hsl(var(--border))]";
  * translucent, and a translucent sticky cell would let content slide visibly beneath it. The
  * composite is the exact colour the header already paints, not an approximation.
  */
+/**
+ * `-top-4` pulls the pinned band up over the shell's own top padding (`p-4` on the main scroller).
+ * With `top-0` the labels stop one padding step below the clip edge, and rows scrolling past them
+ * stay visible in that strip — they would show through above the column names.
+ */
 export const FROZEN_HEADER_CELL_CLASS =
-    "sticky z-20 bg-[color-mix(in_srgb,hsl(var(--muted))_30%,hsl(var(--card)))]";
+    "sticky -top-4 z-40 bg-[color-mix(in_srgb,hsl(var(--muted))_30%,hsl(var(--card)))]";
 
 /**
  * A frozen BODY cell: the opaque card surface, lifted to z-10 over the normal cells.
