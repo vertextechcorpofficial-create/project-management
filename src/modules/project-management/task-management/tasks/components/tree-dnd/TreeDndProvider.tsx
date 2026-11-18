@@ -1,119 +1,61 @@
-"use client";
+﻿"use client";
 
 import {
-    cloneElement,
     createContext,
-    isValidElement,
     useCallback,
     useContext,
     useEffect,
     useMemo,
     useRef,
     useState,
-    useSyncExternalStore,
+    type PointerEvent as ReactPointerEvent,
     type ReactNode,
 } from "react";
-import {
-    closestCenter,
-    DndContext,
-    DragOverlay,
-    KeyboardSensor,
-    pointerWithin,
-    PointerSensor,
-    useSensor,
-    useSensors,
-    type Announcements,
-    type CollisionDetection,
-    type DragEndEvent,
-    type DragMoveEvent,
-    type DragOverEvent,
-    type DragStartEvent,
-    type KeyboardCoordinateGetter,
-    type UniqueIdentifier,
-} from "@dnd-kit/core";
-import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { hasViewportRelativeCoordinates } from "@dnd-kit/utilities";
+import { createPortal } from "react-dom";
 import { GripVertical } from "lucide-react";
 
 import { flattenVisible, type TreeNode } from "../../utils/tree";
 import { type MoveTaskInput } from "@/modules/project-management/task-management/tasks/types/pm-task.schema";
 
-import { TaskPriorityBadge, TaskStatusBadge } from "../TaskRowBadges";
-import type { TaskRowView } from "../TaskRow";
+import { TITLE_CHROME_PX, TITLE_MIN_TEXT_PX, type TaskRowView } from "../TaskRow";
 import {
-    cycleDropIntent,
-    droppableTargetIds,
-    resolveDropDestination,
-    resolveDropIntent,
+    childInsertIndex,
+    computeMovePayload,
+    pointerGapIndex,
+    projectDropSlot,
     type DndRow,
-    type DropIntent,
-    type FlatRow,
-    type MovePayload,
+    type PointerRow,
 } from "./dnd-logic";
 
-const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+/** Pixels of sideways travel that mean one level. Mirrors `INDENT_STEP_PX` in `TaskRow`. */
+const DRAG_INDENT_WIDTH = 20;
 
-/** How long the pointer must dwell on a collapsed parent before it springs open for nesting. */
-const AUTO_EXPAND_DELAY_MS = 500;
+/** Where the drop line starts inside the row indent, in pixels — the mockup's 8px inset. */
+const DROP_LINE_INSET_PX = 8;
 
-/** The intent a keyboard drag starts on: a plain reorder until Left/Right cycle it. */
-const KEYBOARD_START_INTENT: DropIntent = "after";
+/** Travel that separates a click from a drag, in pixels â€” the interactive elements stay clickable. */
+const DRAG_THRESHOLD_PX = 5;
 
-/** The overlay's action label — the human name of each resolved intent. */
-const INTENT_LABELS: Record<DropIntent, string> = {
-    before: "Insert before",
-    nest: "Make sub-task",
-    after: "Insert after",
-};
-
-function subscribeReducedMotion(onStoreChange: () => void): () => void {
-    const query = window.matchMedia(REDUCED_MOTION_QUERY);
-    query.addEventListener("change", onStoreChange);
-    return () => query.removeEventListener("change", onStoreChange);
-}
-
-function getReducedMotionSnapshot(): boolean {
-    return window.matchMedia(REDUCED_MOTION_QUERY).matches;
-}
-
-function getReducedMotionServerSnapshot(): boolean {
-    return false;
-}
-
-/**
- * `true` once the user prefers reduced motion, including when they flip the setting mid-session.
- *
- * Used to drop the animated transform/drop transitions while KEEPING the drop indicators and the
- * drag overlay — motion is reduced, feedback is not removed.
- */
-export function usePrefersReducedMotion(): boolean {
-    return useSyncExternalStore(
-        subscribeReducedMotion,
-        getReducedMotionSnapshot,
-        getReducedMotionServerSnapshot,
-    );
-}
+/** Stable identity for "nothing is hidden", so an idle list never re-renders a new Set. */
+const EMPTY_ID_SET: ReadonlySet<number> = new Set();
 
 /** Everything a row needs to know about the drag currently in flight. */
 export interface TreeDndContextValue {
-    /** The row being dragged, or `null` when no drag is active. */
-    readonly activeId: number | null;
-    /** The row currently under the pointer (or the keyboard's cursor row). */
-    readonly overId: number | null;
-    /** Resolved drop intent for the current `over` row, or `null` when there is none. */
-    readonly intent: DropIntent | null;
     /**
-     * The depth the resolved drop will actually apply, or `null` when the current over is not a
-     * valid drop. It is the SAME value the payload was resolved from — never a second projection.
+     * The row being dragged, or `null` when no drag is active. It KEEPS its slot while it moves (the
+     * mockup's ghost, dimmed to 40%) so the rows around it never jump, and its descendants leave the
+     * list for the duration of the drag.
      */
-    readonly resolvedDepth: number | null;
-    /** True while a filter or search is active; every handle is disabled and no drop is emitted. */
+    readonly activeId: number | null;
+    /** Where the drop line sits, in pixels from the list's top-left corner, or `null` when idle. */
+    readonly line: { readonly top: number; readonly left: number } | null;
+    /** The dragged row and its descendants — the rows that travel with it. */
+    readonly hiddenIds: ReadonlySet<number>;
+    /** True while a filter or search is active; dragging is off and no drop is emitted. */
     readonly isReorderDisabled: boolean;
-    /** The complete flat row set — hidden rows included, so the cycle guard sees the whole tree. */
+    /** The page's flat row set — hidden rows included, so the payload sees the whole tree. */
     readonly rows: readonly DndRow[];
 }
-
 const TreeDndContext = createContext<TreeDndContextValue | null>(null);
 
 /** The drag state for the nearest `TreeDndProvider`. Throws when used outside one. */
@@ -126,33 +68,30 @@ export function useTreeDnd(): TreeDndContextValue {
 }
 
 export interface TreeDndProviderProps {
-    /** The department's forest from `buildTree` — the provider derives the flat set itself. */
+    /** The department's forest from `buildTree` â€” the provider derives the flat set itself. */
     roots: readonly TreeNode<TaskRowView>[];
-    /** Ids whose children are currently shown; the sortable projection follows the visible rows. */
+    /** Ids whose children are currently shown; the pointer model follows the visible rows. */
     expandedIds: ReadonlySet<number>;
     /**
      * Called with the moved row's id and the pinned `{ parent_id, sibling_ids }` payload when a drop
-     * settles on a valid target. Never called for a no-op or a cycle. The id is part of the contract
-     * because the move route is addressed by the moved node (`PATCH /tasks/<id>/move`) while the
-     * payload describes its destination — including a new `parent_id` when the drag re-parented.
+     * settles. The id is part of the contract because the move route is addressed by the moved node
+     * (`PATCH /tasks/<id>/move`) while the payload describes its destination â€” including a new
+     * `parent_id` when the drag re-parented.
      */
     onMove?: (activeId: number, payload: MoveTaskInput) => void;
     /**
-     * The department's COMPLETE flat row set — every root, across every page. It is used for the
-     * cycle guard, the emitted `sibling_ids` and the anchor's position in the full child list, and
-     * defaults to the rows under `roots`. Pagination is by root, so pass this whenever `roots` is a
-     * page slice: the reorder contract is defined over the destination parent's complete child list,
-     * and computing it from one page would omit the off-page siblings.
+     * The department's COMPLETE flat row set â€” every root, across every page. Used for the payload's
+     * `sibling_ids`, and defaults to the rows under `roots`.
      */
     allRows?: readonly DndRow[];
-    /** Disables every drag handle — todo 21 sets this while a filter or search is active. */
+    /** Disables dragging â€” set while a filter or search is active. */
     reorderDisabled?: boolean;
-    /** Overrides the dragged-row clone; defaults to a compact title + badges card. */
+    /** Overrides the chip that follows the pointer; defaults to a compact grip + title card. */
     renderOverlay?: (node: TreeNode<TaskRowView>) => ReactNode;
     children: ReactNode;
 }
 
-/** Pre-order walk over the WHOLE forest — collapsed rows stay in the cycle guard's view. */
+/** Pre-order walk over the WHOLE forest â€” collapsed rows stay in the payload's view. */
 function collectAllRows<T extends DndRow>(roots: readonly TreeNode<T>[]): TreeNode<T>[] {
     const collected: TreeNode<T>[] = [];
     const stack: TreeNode<T>[] = [...roots];
@@ -165,37 +104,61 @@ function collectAllRows<T extends DndRow>(roots: readonly TreeNode<T>[]): TreeNo
     return collected;
 }
 
-function pointerFromActivator(activator: Event): { x: number; y: number } | null {
-    if (!hasViewportRelativeCoordinates(activator)) return null;
-    return { x: activator.clientX, y: activator.clientY };
+/** The pointer gesture currently in flight. Plain refs: a move must not wait for a render. */
+interface DragGesture {
+    readonly id: number;
+    readonly startX: number;
+    readonly startY: number;
+    /** The row's depth when it was picked up. Sideways travel is added to this. */
+    readonly depth: number;
+    /**
+     * The row and everything under it. Held from the grab (not read from state) because the first
+     * pointer move resolves BEFORE the list has re-rendered without the subtree: without this the
+     * dragged row would still count as one of its own neighbours for that frame, shifting the gap and
+     * the level by one.
+     */
+    readonly hiddenIds: ReadonlySet<number>;
+    started: boolean;
+}
+
+/** A row plus its descendants, walked over the page's complete flat set. */
+function collectSubtreeIds(rows: readonly DndRow[], rootId: number): ReadonlySet<number> {
+    const childrenByParent = new Map<number, number[]>();
+    for (const row of rows) {
+        if (row.parent_id === null) continue;
+        const siblings = childrenByParent.get(row.parent_id);
+        if (siblings === undefined) childrenByParent.set(row.parent_id, [row.id]);
+        else siblings.push(row.id);
+    }
+    const ids = new Set<number>([rootId]);
+    const stack = [rootId];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (current === undefined) continue;
+        for (const child of childrenByParent.get(current) ?? []) {
+            if (ids.has(child)) continue;
+            ids.add(child);
+            stack.push(child);
+        }
+    }
+    return ids;
 }
 
 /**
- * The single drag-and-drop wrapper for the task tree.
+ * Drag-and-drop for the task tree, ported from the reference mockup (`pm/drag&drop/task-dnd-preview.html`).
  *
- * Architecture (pinned and non-negotiable):
- * - ONE `DndContext` for the whole tree region.
- * - ONE `SortableContext` over the flattened projection of currently VISIBLE rows — never one per
- *   tree level. A collapsed subtree is excluded from `items` until it is expanded OR until a
- *   drag-dwell springs it open (see the transient expansion below).
- * - ONE droppable per row, and it is the sortable registered by `useSortable` inside
- *   `SortableTaskRow`. The provider deliberately registers no second droppable: a duplicate id
- *   collides in dnd-kit's container map and clobbers the measured rect.
- * - The drop INTENT is the whole hierarchy decision: the pointer's vertical third picks
- *   before / nest / after (`resolveDropIntent`), and the keyboard's Left/Right cycles the same ring
- *   (`cycleDropIntent`). There is no horizontal-offset depth channel.
- * - Resolution happens ONCE per move and is stored. The indicator, the overlay label and the drop
- *   all read the same `resolvedDepth` / payload, so what is previewed is exactly what a drop applies.
- * - The collision detector scopes candidates to `droppableTargetIds`, i.e. every row except the
- *   dragged node and its descendants, so `over` can never resolve onto a cycle target.
- *   `pointerWithin` is primary, `closestCenter` the row-gap fall-through.
- * - Dwell-spring: hovering a collapsed parent for `AUTO_EXPAND_DELAY_MS` expands it for the
- *   duration of the drag only. The expansion is derived into the rendered children, never written
- *   back to the tree's own expand state, and is dropped the moment the drag ends.
- * - `DragOverlay` renders the clone so the list does not reflow mid-drag.
- *
- * Data-injectable: `roots` / `expandedIds` / `onMove` are props, so the engine mounts with fixtures
- * and no API.
+ * The model is the mockup's, and it is deliberately NOT dnd-kit's sortable model:
+ * - A row is picked up by pressing anywhere on it (touch must start on the grip so the list still
+ *   scrolls), and the drag begins after 5px of travel, so a plain click still opens the task.
+ * - While dragging, the picked-up row is REMOVED from the list together with its descendants. The rows
+ *   around it close up; nothing is displaced, no ghost keeps a slot, and the neighbours a drop is
+ *   clamped against are the ones the drop would actually leave behind.
+ * - The pointer's vertical position picks the GAP, measured against row centres; its horizontal travel
+ *   picks the LEVEL (`offsetX / 20px`), clamped by the rows either side of that gap. One drop line
+ *   sits IN the gap, from `depth Ã— 20 + 8` to the right edge â€” its length is the level.
+ * - A chip follows the pointer (+12/+8) with the task's name. One sentence under the list says what
+ *   the drop would do.
+ * - Escape and `pointercancel` abandon without a write; the row regains focus after a drop.
  */
 export function TreeDndProvider({
     roots,
@@ -206,14 +169,16 @@ export function TreeDndProvider({
     renderOverlay,
     children,
 }: TreeDndProviderProps) {
-    const prefersReducedMotion = usePrefersReducedMotion();
     const [activeId, setActiveId] = useState<number | null>(null);
-    const [overId, setOverId] = useState<number | null>(null);
-    const [intent, setIntent] = useState<DropIntent | null>(null);
-    const [resolvedDepth, setResolvedDepth] = useState<number | null>(null);
-    const [transientExpandedIds, setTransientExpandedIds] = useState<ReadonlySet<number>>(
-        () => new Set<number>(),
-    );
+    const [line, setLine] = useState<{ top: number; left: number } | null>(null);
+    const [hintParentId, setHintParentId] = useState<number | null>(null);
+    const [chip, setChip] = useState<{ x: number; y: number } | null>(null);
+
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    /** Last pointer position, so a scroll can re-place the line without waiting for a new move. */
+    const pointerRef = useRef<{ x: number; y: number } | null>(null);
+    const gestureRef = useRef<DragGesture | null>(null);
+    const payloadRef = useRef<MoveTaskInput | null>(null);
 
     const pageRows = useMemo(() => collectAllRows(roots), [roots]);
     const computationRows = useMemo<readonly DndRow[]>(
@@ -221,413 +186,319 @@ export function TreeDndProvider({
         [allRows, pageRows],
     );
 
-    /** The drag-scoped expansion is unioned over the caller's set; the caller's state is untouched. */
-    const effectiveExpandedIds = useMemo<ReadonlySet<number>>(() => {
-        if (transientExpandedIds.size === 0) return expandedIds;
-        const merged = new Set(expandedIds);
-        for (const id of transientExpandedIds) merged.add(id);
-        return merged;
-    }, [expandedIds, transientExpandedIds]);
+    /**
+     * The rows on screen, in render order. Collapsed subtrees are absent on purpose: a drag positions
+     * against what the user can see.
+     */
+    const visibleNodes = useMemo(() => flattenVisible(roots, expandedIds), [roots, expandedIds]);
 
-    const visibleNodes = useMemo(
-        () => flattenVisible(roots, effectiveExpandedIds),
-        [roots, effectiveExpandedIds],
-    );
-    const visibleIds = useMemo(() => visibleNodes.map((node) => node.id), [visibleNodes]);
-    const visibleRows = useMemo<readonly FlatRow[]>(
-        () =>
-            visibleNodes.map((node) => ({
-                id: node.id,
-                parent_id: node.parent_id,
-                sort_order: node.sort_order,
-                depth: node.depth,
-            })),
-        [visibleNodes],
-    );
+    /**
+     * The dragged row and its descendants, removed for the duration of the drag â€” the mockup's
+     * `visible()` skip. The subtree is identified from the page's rows, so a collapsed child that is
+     * not on screen still travels with its parent.
+     */
+    const hiddenIds = useMemo<ReadonlySet<number>>(() => {
+        if (activeId === null) return EMPTY_ID_SET;
+        const hidden = new Set<number>([activeId]);
+        const stack = [activeId];
+        const childrenByParent = new Map<number, number[]>();
+        for (const row of computationRows) {
+            if (row.parent_id === null) continue;
+            const siblings = childrenByParent.get(row.parent_id);
+            if (siblings === undefined) childrenByParent.set(row.parent_id, [row.id]);
+            else siblings.push(row.id);
+        }
+        while (stack.length > 0) {
+            const current = stack.pop();
+            if (current === undefined) continue;
+            for (const child of childrenByParent.get(current) ?? []) {
+                if (hidden.has(child)) continue;
+                hidden.add(child);
+                stack.push(child);
+            }
+        }
+        return hidden;
+    }, [activeId, computationRows]);
+
+    /** The rows the user sees while dragging: render order minus the dragged subtree. */
     const nodesById = useMemo(() => {
         const byId = new Map<number, TreeNode<TaskRowView>>();
         for (const node of pageRows) byId.set(node.id, node);
         return byId;
     }, [pageRows]);
 
-    const pointerRef = useRef<{ x: number; y: number } | null>(null);
-    const overRectRef = useRef<{ top: number; height: number } | null>(null);
-    const overIdRef = useRef<number | null>(null);
-    const intentRef = useRef<DropIntent | null>(null);
-    const pendingPayloadRef = useRef<MovePayload | null>(null);
-    /** The last resolved over+intent, kept for the drag-end announcement (which can run after the state reset). */
-    const dropAnnouncementRef = useRef<{ overId: number | null; intent: DropIntent | null }>({
-        overId: null,
-        intent: null,
-    });
-    const keyboardIntentRef = useRef<DropIntent>(KEYBOARD_START_INTENT);
-    const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const depthById = useMemo(() => {
+        const depths = new Map<number, number>();
+        for (const node of visibleNodes) depths.set(node.id, node.depth);
+        return depths;
+    }, [visibleNodes]);
 
-    /**
-     * Resolves the current over+intent ONCE and stores the result.
-     *
-     * `pendingPayloadRef` is the single source of truth a drop emits; `resolvedDepth` is the single
-     * source the indicator/label renders. Recomputing at drop time would reintroduce the exact
-     * preview/result divergence this replaces.
-     */
-    const resolveCurrent = useCallback(
-        (active: number, over: number | null, nextIntent: DropIntent | null) => {
-            dropAnnouncementRef.current = { overId: over === active ? null : over, intent: nextIntent };
-            if (over === null || over === active || nextIntent === null) {
-                pendingPayloadRef.current = null;
-                setResolvedDepth(null);
-                return;
-            }
-            const resolved = resolveDropDestination({
-                visibleRows,
-                allRows: computationRows,
-                activeId: active,
-                overId: over,
-                intent: nextIntent,
-            });
-            pendingPayloadRef.current = resolved === null ? null : resolved.payload;
-            setResolvedDepth(resolved === null ? null : resolved.depth);
-        },
-        [visibleRows, computationRows],
-    );
+    const parentById = useMemo(() => {
+        const parents = new Map<number, number | null>();
+        for (const node of visibleNodes) parents.set(node.id, node.parent_id);
+        return parents;
+    }, [visibleNodes]);
 
-    const applyIntent = useCallback(
-        (active: number, over: number | null, nextIntent: DropIntent | null) => {
-            intentRef.current = nextIntent;
-            setIntent(nextIntent);
-            resolveCurrent(active, over, nextIntent);
-        },
-        [resolveCurrent],
-    );
-
-    /**
-     * Left/Right cycle the drop intent (before → nest → after), Up/Down step the order.
-     *
-     * dnd-kit's keyboard sensor only understands coordinates, so Left/Right return the unchanged
-     * coordinates to keep `over` put while the intent ring advances; Up/Down delegate to
-     * `sortableKeyboardCoordinates`. Drop (Enter/Space) and cancel (Esc) stay the sensor's, and the
-     * stored payload obeys the same neighbour clamp and cycle rules as the pointer's.
-     */
-    const coordinateGetter = useCallback<KeyboardCoordinateGetter>(
-        (event, args) => {
-            if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
-                event.preventDefault();
-                const next = cycleDropIntent(
-                    intentRef.current ?? KEYBOARD_START_INTENT,
-                    event.code === "ArrowRight" ? 1 : -1,
-                );
-                keyboardIntentRef.current = next;
-                applyIntent(Number(args.active), overIdRef.current, next);
-                return args.currentCoordinates;
-            }
-            return sortableKeyboardCoordinates(event, args);
-        },
-        [applyIntent],
-    );
-
-    const sensors = useSensors(
-        useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-        useSensor(KeyboardSensor, { coordinateGetter }),
-    );
-
-    const collisionDetection = useCallback<CollisionDetection>(
-        (args) => {
-            // Cycle guard at the collision layer: the dragged node and its descendants can never be
-            // `over`, so a re-parent that would loop is never previewable. Unlike the old
-            // same-parent filter this does NOT restrict the destination level — re-parenting is the
-            // whole point now; only the structural cycle is refused.
-            const targets = droppableTargetIds(computationRows, Number(args.active.id));
-            const scoped = {
-                ...args,
-                droppableContainers: args.droppableContainers.filter((container) =>
-                    targets.has(Number(container.id)),
-                ),
-            };
-            if (scoped.droppableContainers.length === 0) return [];
-
-            const pointerCollisions = pointerWithin(scoped);
-            return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(scoped);
-        },
-        [computationRows],
-    );
-
-    const clearTransientExpansion = useCallback(() => {
-        if (expandTimerRef.current !== null) {
-            clearTimeout(expandTimerRef.current);
-            expandTimerRef.current = null;
-        }
-        setTransientExpandedIds((previous) => (previous.size === 0 ? previous : new Set<number>()));
+    const reset = useCallback(() => {
+        gestureRef.current = null;
+        payloadRef.current = null;
+        setActiveId(null);
+        setLine(null);
+        setHintParentId(null);
+        setChip(null);
     }, []);
 
-    const clearDragState = useCallback(() => {
-        pointerRef.current = null;
-        overRectRef.current = null;
-        overIdRef.current = null;
-        intentRef.current = null;
-        pendingPayloadRef.current = null;
-        keyboardIntentRef.current = KEYBOARD_START_INTENT;
-        clearTransientExpansion();
-        setActiveId(null);
-        setOverId(null);
-        setIntent(null);
-        setResolvedDepth(null);
-    }, [clearTransientExpansion]);
-
     /**
-     * Spring-loading: while a drag hovers a collapsed parent, start a one-shot timer; when it fires,
-     * add the id to the drag-scoped transient set so its children render and become drop targets.
-     * Any change of `over` (or of the drag) cancels the timer, so springing is deliberate, not
-     * incidental. The caller's persistent `expandedIds` is never written.
+     * One resolution per pointer move: the line, the hint and the emitted payload all come from this,
+     * so what the user sees is exactly what a drop writes.
      */
-    useEffect(() => {
-        if (expandTimerRef.current !== null) {
-            clearTimeout(expandTimerRef.current);
-            expandTimerRef.current = null;
-        }
-        if (activeId === null || overId === null) return;
-        if (effectiveExpandedIds.has(overId)) return;
-        const node = nodesById.get(overId);
-        if (node === undefined || node.children.length === 0) return;
+    const resolveAt = useCallback(
+        (clientX: number, clientY: number) => {
+            const container = containerRef.current;
+            const gesture = gestureRef.current;
+            if (container === null || gesture === null) return;
 
-        expandTimerRef.current = setTimeout(() => {
-            expandTimerRef.current = null;
-            setTransientExpandedIds((previous) => {
-                if (previous.has(overId)) return previous;
-                const next = new Set(previous);
-                next.add(overId);
-                return next;
+            const elements = Array.from(
+                container.querySelectorAll<HTMLElement>("tr[data-task-id]"),
+            ).filter((element) => !gesture.hiddenIds.has(Number(element.dataset.taskId)));
+            const rects = elements.map((element) => element.getBoundingClientRect());
+            const index = pointerGapIndex(rects, clientY);
+
+            // The list is read from the DOM, not from the provider's own flatten: the tree renders a
+            // page, so only the rows on screen are rows the pointer can reach. The dragged subtree is
+            // gone from it, exactly as a drop would leave the list.
+            const projectionRows: PointerRow[] = elements.map((element) => {
+                const id = Number(element.dataset.taskId);
+                return {
+                    id,
+                    parentId: parentById.get(id) ?? null,
+                    depth: depthById.get(id) ?? 0,
+                };
             });
-        }, AUTO_EXPAND_DELAY_MS);
 
-        return () => {
-            if (expandTimerRef.current !== null) {
-                clearTimeout(expandTimerRef.current);
-                expandTimerRef.current = null;
-            }
-        };
-    }, [activeId, overId, effectiveExpandedIds, nodesById]);
+            const projection = projectDropSlot({
+                rows: projectionRows,
+                activeDepth: gesture.depth,
+                offsetX: clientX - gesture.startX,
+                index,
+                indentWidth: DRAG_INDENT_WIDTH,
+            });
 
-    const handleDragStart = (event: DragStartEvent) => {
-        pointerRef.current = pointerFromActivator(event.activatorEvent);
-        overRectRef.current = null;
-        overIdRef.current = null;
-        intentRef.current = null;
-        pendingPayloadRef.current = null;
-        keyboardIntentRef.current = KEYBOARD_START_INTENT;
-        clearTransientExpansion();
-        setActiveId(Number(event.active.id));
-        setOverId(null);
-        setIntent(null);
-        setResolvedDepth(null);
-    };
-
-    const handleDragOver = (event: DragOverEvent) => {
-        const active = Number(event.active.id);
-        const over = event.over === null ? null : Number(event.over.id);
-        const overChanged = over !== overIdRef.current;
-        overIdRef.current = over;
-        setOverId(over);
-
-        if (over === null || over === active) {
-            overRectRef.current = null;
-            applyIntent(active, over, null);
-            return;
-        }
-
-        const rect = event.over?.rect ?? null;
-        overRectRef.current = rect === null ? null : { top: rect.top, height: rect.height };
-
-        const pointer = pointerRef.current;
-        if (pointer === null || rect === null) {
-            // Keyboard drag: the intent is the ring's current value, not a pointer position.
-            applyIntent(active, over, keyboardIntentRef.current);
-            return;
-        }
-
-        applyIntent(
-            active,
-            over,
-            resolveDropIntent({
-                pointerY: pointer.y + event.delta.y,
-                rectTop: rect.top,
-                rectHeight: rect.height,
-                // A fresh hover resolves on the plain thirds; within one row the previous intent
-                // widens its own edge so a pointer on a boundary holds steady.
-                previous: overChanged ? null : intentRef.current,
-            }),
-        );
-    };
-
-    const handleDragMove = (event: DragMoveEvent) => {
-        // The pointer can change third within the SAME row without `over` changing, so the intent is
-        // re-resolved on every move — that is what makes the indicator update live.
-        const active = Number(event.active.id);
-        const over = event.over === null ? overIdRef.current : Number(event.over.id);
-        if (event.over !== null) {
-            overRectRef.current = { top: event.over.rect.top, height: event.over.rect.height };
-        }
-        const pointer = pointerRef.current;
-        const rect = overRectRef.current;
-
-        if (pointer !== null && rect !== null && over !== null && over !== active) {
-            applyIntent(
-                active,
-                over,
-                resolveDropIntent({
-                    pointerY: pointer.y + event.delta.y,
-                    rectTop: rect.top,
-                    rectHeight: rect.height,
-                    previous: intentRef.current,
-                }),
+            const insertAt = childInsertIndex(projectionRows, projection.index, projection.parentId);
+            const payload = computeMovePayload(
+                computationRows,
+                gesture.id,
+                projection.parentId,
+                insertAt,
             );
+
+            payloadRef.current = payload;
+
+            /*
+             * The line is a child of the LIST, not of a row: it sits IN the gap and reaches to the
+             * right edge, exactly as the mockup appends its `.line` to the list element. Its top is the
+             * bottom edge of the row above the gap (0 at the top of the list); its left is the
+             * projected level's indent inside the title cell, so the line's start reads as the depth.
+             */
+            const listRect = container.getBoundingClientRect();
+            const anchorBottom = index === 0 ? 0 : (rects[index - 1]?.bottom ?? 0) - listRect.top;
+            const titleCell = container.querySelector<HTMLElement>(
+                `tr[data-task-id="${gesture.id}"] [data-slot="task-title-cell"]`,
+            );
+            const titleRect = titleCell?.getBoundingClientRect();
+            const titleLeft = titleRect === undefined ? 0 : titleRect.left - listRect.left;
+            const titleWidth = titleRect?.width ?? 0;
+
+            setLine({
+                top: anchorBottom,
+                left:
+                    titleLeft +
+                    Math.min(
+                        projection.depth * DRAG_INDENT_WIDTH,
+                        Math.max(0, titleWidth - (TITLE_CHROME_PX + TITLE_MIN_TEXT_PX)),
+                    ) +
+                    DROP_LINE_INSET_PX,
+            });
+            setHintParentId(projection.parentId);
+            setChip({ x: clientX + 12, y: clientY + 8 });
+        },        [computationRows, parentById, depthById],
+    );
+
+    const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        if (reorderDisabled || event.button !== 0) return;
+
+        const target = event.target as HTMLElement;
+        if (target.closest("button, input, textarea, select, a, [role='combobox']") !== null) return;
+
+        const row = target.closest<HTMLElement>("tr[data-task-id]");
+        if (row === null) return;
+        // Touch drags start on the grip only, so a swipe still scrolls the list.
+        if (
+            event.pointerType === "touch" &&
+            target.closest('[data-slot="task-tree-drag-handle"]') === null
+        ) {
             return;
         }
-        resolveCurrent(active, over, intentRef.current);
-    };
 
-    const handleDragEnd = (event: DragEndEvent) => {
-        const active = Number(event.active.id);
-        // The payload resolved during the last move IS the drop — it is never re-derived here.
-        const payload = pendingPayloadRef.current;
+        const id = Number(row.dataset.taskId);
+        const depth = depthById.get(id);
+        if (depth === undefined) return;
 
-        clearDragState();
+        // The press belongs to the list: stop the browser from starting a text selection that would
+        // follow the pointer instead of the row. Clicks still fire, so a plain click still opens the task.
+        event.preventDefault();
 
-        if (reorderDisabled) return;
-        if (payload === null) return;
+        gestureRef.current = {
+            id,
+            startX: event.clientX,
+            startY: event.clientY,
+            depth,
+            hiddenIds: collectSubtreeIds(computationRows, id),
+            started: false,
+        };
+    }, [computationRows, depthById, reorderDisabled]);
 
-        onMove?.(active, payload);
-    };
+    useEffect(() => {
+        const finish = (commit: boolean) => {
+            const gesture = gestureRef.current;
+            if (gesture === null) return;
+            const payload = payloadRef.current;
+            const moved = commit && gesture.started ? payload : null;
+            reset();
+            if (moved === null) return;
+            onMove?.(gesture.id, moved);
+            requestAnimationFrame(() => {
+                document.querySelector<HTMLElement>(`tr[data-task-id="${gesture.id}"]`)?.focus();
+            });
+        };
+
+        const handleMove = (event: PointerEvent) => {
+            const gesture = gestureRef.current;
+            if (gesture === null) return;
+            // A held pointer reports `button === -1` on every move (no button changed state), so the
+            // held state has to be read from `buttons`. `button` is only meaningful on pointerdown.
+            if (event.buttons === 0) {
+                finish(false);
+                return;
+            }
+
+            if (!gesture.started) {
+                const travelled = Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY);
+                if (travelled < DRAG_THRESHOLD_PX) return;
+                gesture.started = true;
+                setActiveId(gesture.id);
+            }
+
+            pointerRef.current = { x: event.clientX, y: event.clientY };
+            resolveAt(event.clientX, event.clientY);
+        };
+
+        const handlePointerUp = () => finish(true);
+        const handlePointerCancel = () => finish(false);
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape" && gestureRef.current !== null) finish(false);
+        };
+
+        const handleScroll = () => {
+            const pointer = pointerRef.current;
+            if (pointer === null || gestureRef.current === null) return;
+            resolveAt(pointer.x, pointer.y);
+        };
+
+        window.addEventListener("pointermove", handleMove);
+        window.addEventListener("scroll", handleScroll, true);
+        window.addEventListener("pointerup", handlePointerUp);
+        window.addEventListener("pointercancel", handlePointerCancel);
+        window.addEventListener("keydown", handleKeyDown);
+        return () => {
+            window.removeEventListener("pointermove", handleMove);
+            window.removeEventListener("scroll", handleScroll, true);
+            window.removeEventListener("pointerup", handlePointerUp);
+            window.removeEventListener("pointercancel", handlePointerCancel);
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [reset, resolveAt, onMove]);
 
     const contextValue = useMemo<TreeDndContextValue>(
         () => ({
             activeId,
-            overId,
-            intent,
-            resolvedDepth,
+            line,
+            hiddenIds,
             isReorderDisabled: reorderDisabled,
             rows: computationRows,
         }),
-        [activeId, overId, intent, resolvedDepth, computationRows, reorderDisabled],
+        [
+            activeId,
+            line,
+            hiddenIds,
+            reorderDisabled,
+            computationRows,
+        ],
     );
-
-    /**
-     * The rendered children with the drag-scoped expansion folded in.
-     *
-     * A clone is the only way a wrapper can widen a child's `expandedIds` prop without editing the
-     * child: the caller's element keeps its own props, and this override exists only while a
-     * transient expansion is live (i.e. mid-drag), so the persistent state and its owners are intact.
-     */
-    const renderedChildren = useMemo<ReactNode>(() => {
-        if (transientExpandedIds.size === 0) return children;
-        if (!isValidElement<{ expandedIds?: ReadonlySet<number> }>(children)) return children;
-        return cloneElement(children, { expandedIds: effectiveExpandedIds });
-    }, [children, transientExpandedIds, effectiveExpandedIds]);
 
     const activeNode = activeId === null ? null : (nodesById.get(activeId) ?? null);
 
-    /**
-     * Screen-reader narration for a keyboard drag. The drag clone is visual only, so these strings
-     * are the sole feedback a keyboard or screen-reader user gets between pick-up and drop.
-     */
-    const titleOf = useCallback(
-        (id: UniqueIdentifier | null): string => {
-            if (id === null) return "the task";
-            return nodesById.get(Number(id))?.title ?? "the task";
-        },
-        [nodesById],
-    );
-
-    const announcements = useMemo<Announcements>(() => {
-        const describe = (
-            active: UniqueIdentifier,
-            over: UniqueIdentifier,
-            intent: DropIntent | null,
-            tense: "was" | "will be",
-        ): string => {
-            if (intent === "nest") return `${titleOf(active)} ${tense} nested under ${titleOf(over)}.`;
-            if (intent === "before") return `${titleOf(active)} ${tense} moved before ${titleOf(over)}.`;
-            if (intent === "after") return `${titleOf(active)} ${tense} moved after ${titleOf(over)}.`;
-            return `${titleOf(active)} was dropped.`;
-        };
-
-        return {
-            onDragStart: ({ active }) => `Picked up ${titleOf(active.id)}. Use Up and Down to move, Left and Right to change the level, Space to drop, Escape to cancel.`,
-            onDragOver: ({ active, over }) =>
-                over === null
-                    ? `${titleOf(active.id)} is not over a row.`
-                    : describe(active.id, over.id, intentRef.current, "will be"),
-            onDragEnd: ({ active }) => {
-                const { overId, intent } = dropAnnouncementRef.current;
-                if (overId === null) return `${titleOf(active.id)} was dropped.`;
-                return describe(active.id, overId, intent, "was");
-            },
-            onDragCancel: () => "Moving was cancelled.",
-        };
-    }, [titleOf]);
+    /** What the drop would do right now, in the mockup's words. `null` while dragging is disabled. */
+    const hint =
+        activeId === null
+            ? reorderDisabled
+                ? null
+                : "Drag a row to reorder. Drag right to nest, left to move out."
+            : hintParentId === null
+              ? "Will be a top-level task"
+              : `Will become a subtask of "${nodesById.get(hintParentId)?.title ?? "another task"}"`;
 
     return (
-        <DndContext
-            sensors={sensors}
-            collisionDetection={collisionDetection}
-            modifiers={[restrictToVerticalAxis]}
-            accessibility={{ announcements }}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragMove={handleDragMove}
-            onDragEnd={handleDragEnd}
-            onDragCancel={clearDragState}
+        <div
+            ref={containerRef}
+            onPointerDown={handlePointerDown}
+            data-slot="task-tree-dnd"
+            className="relative"
         >
             <TreeDndContext.Provider value={contextValue}>
-                <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
-                    {renderedChildren}
-                </SortableContext>
+                {children}
+                {line === null ? null : (
+                    <span
+                        aria-hidden="true"
+                        data-slot="task-drop-line"
+                        style={{ top: line.top, left: line.left }}
+                        className="pointer-events-none absolute right-0 z-20 h-0.5 rounded-full bg-primary transition-[left] duration-100"
+                    >
+                        <span className="absolute -top-[3px] -left-1 size-2 rounded-full border-2 border-primary bg-background" />
+                    </span>
+                )}
+                {hint === null ? null : (
+                    <p
+                        data-slot="task-dnd-hint"
+                        aria-live="polite"
+                        className="mt-1 px-3 pb-2 text-xs text-muted-foreground"
+                    >
+                        {hint}
+                    </p>
+                )}
             </TreeDndContext.Provider>
 
-            <DragOverlay
-                dropAnimation={prefersReducedMotion ? null : undefined}
-                modifiers={[restrictToVerticalAxis]}
-            >
-                {activeNode === null
-                    ? null
-                    : (renderOverlay?.(activeNode) ?? (
-                          <TaskDragOverlay
-                              node={activeNode}
-                              intent={intent}
-                              resolvedDepth={resolvedDepth}
-                          />
-                      ))}
-            </DragOverlay>
-        </DndContext>
+            {chip === null || activeNode === null || typeof document === "undefined"
+                ? null
+                : createPortal(
+                      <div
+                          data-slot="task-drag-overlay"
+                          style={{ left: chip.x, top: chip.y }}
+                          className="pointer-events-none fixed z-50 flex max-w-[240px] items-center gap-1.5 rounded-md border border-border/60 bg-card px-2.5 py-1.5 shadow-lg"
+                      >
+                          {renderOverlay?.(activeNode) ?? <TaskDragCard node={activeNode} />}
+                      </div>,
+                      document.body,
+                  )}
+        </div>
     );
 }
 
-function TaskDragOverlay({
-    node,
-    intent,
-    resolvedDepth,
-}: {
-    node: TreeNode<TaskRowView>;
-    intent: DropIntent | null;
-    resolvedDepth: number | null;
-}) {
+function TaskDragCard({ node }: { node: TreeNode<TaskRowView> }) {
     return (
-        <div
-            data-slot="task-drag-overlay"
-            className="flex max-w-[360px] items-center gap-2 rounded-md border border-border/60 bg-card px-3 py-2 shadow-lg"
-        >
+        <>
             <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span className="truncate text-sm font-medium">{node.title}</span>
-            <TaskStatusBadge status={node.status} />
-            <TaskPriorityBadge priority={node.priority} />
-            {intent !== null && (
-                <span
-                    data-slot="task-drag-intent"
-                    className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary"
-                >
-                    {INTENT_LABELS[intent]}
-                    {resolvedDepth === null ? "" : ` · Level ${resolvedDepth + 1}`}
-                </span>
-            )}
-        </div>
+        </>
     );
 }

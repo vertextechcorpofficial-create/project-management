@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { useCallback, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useCallback, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { ChevronRight, Pencil, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +36,7 @@ import type { TaskCatalogs, TaskField, TaskFieldValue, TaskTagRef } from "../hoo
  * enrich it with the computed `depth` and `children` the row is rendered from.
  *
  * Status and priority arrive already resolved (or `null` when the referenced catalog row is not
- * live) — the row never looks a label up itself. The ids ride along anyway: the in-place editor
+ * live) â€” the row never looks a label up itself. The ids ride along anyway: the in-place editor
  * needs them to open the picker on the row's current value.
  */
 export interface TaskRowView {
@@ -51,18 +51,18 @@ export interface TaskRowView {
     status: TaskCatalogRef | null;
     priority: TaskCatalogRef | null;
     assignees: readonly TaskAssigneeView[];
-    /** The tags attached to this task — ids only; `catalogs.tags` supplies the labels and colours. */
+    /** The tags attached to this task â€” ids only; `catalogs.tags` supplies the labels and colours. */
     tags: readonly TaskTagRef[];
     /** This task's answers for the department's custom columns; a column with no answer is absent. */
     custom_values: readonly TaskFieldValue[];
-    /** The server's per-row edit answer — the only thing an edit affordance may be gated on. */
+    /** The server's per-row edit answer â€” the only thing an edit affordance may be gated on. */
     can_edit: boolean;
 }
 
 /**
  * A row's optimistic display patch for the one cell being saved.
  *
- * A cell commits in place, so the row must show the new value while the write is in flight — this
+ * A cell commits in place, so the row must show the new value while the write is in flight â€” this
  * is the ONE deliberate exception to the module's "no optimistic patching" rule. The module drops
  * the patch once its refetch (or its failure) has produced the server's answer, which is what makes
  * a failed save revert.
@@ -95,7 +95,7 @@ export const MAX_INDENT_DEPTH = 8;
 /**
  * Pixels of left gutter per level of visual indent.
  *
- * Sized just wider than a parent's leading group — the 24px subtask-count slot plus the 6px gap —
+ * Sized just wider than a parent's leading group â€” the 24px subtask-count slot plus the 6px gap â€”
  * so a child's status glyph and title always clear the parent's leading block, which is what makes
  * the level step legible. The step is a runtime number and stays an INLINE STYLE (see the padding
  * application below); it can never be a Tailwind class.
@@ -103,7 +103,7 @@ export const MAX_INDENT_DEPTH = 8;
  * Deep levels step the full amount until the leading group plus a readable stub of the name fills
  * the cell: the indent is clamped against `TITLE_CHROME_PX + TITLE_MIN_TEXT_PX`, not against a share
  * of the column, so two rows at one level share an x and a wide column keeps stepping instead of
- * freezing early. Past that point the icon pins and the name keeps its stub — the row never spills
+ * freezing early. Past that point the icon pins and the name keeps its stub â€” the row never spills
  * into the next column, and the level step stops rather than the text vanishing.
  */
 export const INDENT_STEP_PX = 20;
@@ -116,8 +116,8 @@ export const INDENT_STEP_PX = 20;
 export const TITLE_CHROME_PX = 76;
 
 /**
- * The name space the indent must leave behind before it stops, in pixels — roughly a dozen
- * characters at the title's 14px medium weight (≈7px each). Without it a deep row's glyph would pin
+ * The name space the indent must leave behind before it stops, in pixels â€” roughly a dozen
+ * characters at the title's 14px medium weight (â‰ˆ7px each). Without it a deep row's glyph would pin
  * against the border and the name would collapse to nothing, which reads as a broken row rather than
  * as a deep one.
  */
@@ -126,25 +126,25 @@ export const TITLE_MIN_TEXT_PX = 84;
 /**
  * A `YYYY-MM-DD` task date as long-form display text.
  *
- * Parsing goes through `parseDateOnly` (local calendar parts), not `new Date(value)` — a bare
+ * Parsing goes through `parseDateOnly` (local calendar parts), not `new Date(value)` â€” a bare
  * date-only string is read as UTC midnight, which would render the previous day west of UTC. A
  * missing or malformed value renders an em dash rather than an empty cell.
  */
 export function formatTaskDate(value: string | null | undefined): string {
     const date = parseDateOnly(value);
-    return date === undefined ? "—" : formatDateLong(date);
+    return date === undefined ? "â€”" : formatDateLong(date);
 }
 
-/** Short month names, indexed by `Date.getMonth()`. A literal table, not `Intl` — see conventions §19. */
+/** Short month names, indexed by `Date.getMonth()`. A literal table, not `Intl` â€” see conventions Â§19. */
 const MONTH_ABBREVIATIONS: readonly string[] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/** A `YYYY-MM-DD` task date as short display text (`Sep 17, 2026`); `—` when missing or malformed. */
+/** A `YYYY-MM-DD` task date as short display text (`Sep 17, 2026`); `â€”` when missing or malformed. */
 export function formatTaskDateCompact(value: string | null | undefined): string {
     const date = parseDateOnly(value);
-    if (date === undefined) return "—";
+    if (date === undefined) return "â€”";
     return `${MONTH_ABBREVIATIONS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 }
 
@@ -160,13 +160,13 @@ export function formatTaskDateRange(
     const startDate = parseDateOnly(start);
     const endDate = parseDateOnly(end);
 
-    if (startDate === undefined && endDate === undefined) return "—";
+    if (startDate === undefined && endDate === undefined) return "â€”";
     if (endDate === undefined) return formatTaskDateCompact(start);
     if (startDate === undefined) return formatTaskDateCompact(end);
 
     const startText = formatTaskDateCompact(start);
     const endText = formatTaskDateCompact(end);
-    return startText === endText ? startText : `${startText} – ${endText}`;
+    return startText === endText ? startText : `${startText} â€“ ${endText}`;
 }
 
 /**
@@ -174,11 +174,11 @@ export function formatTaskDateRange(
  *
  * A `select` renders its choice's label, so a rename is reflected without touching a task row. A
  * stored id whose choice is no longer live renders the removed-choice placeholder rather than the
- * bare number — the same rule the status and priority badges follow for an unresolved reference.
+ * bare number â€” the same rule the status and priority badges follow for an unresolved reference.
  * A blank answer renders an em dash.
  */
 export function formatTaskFieldValue(field: TaskField, value: string | null | undefined): string {
-    if (value === null || value === undefined || value === "") return "—";
+    if (value === null || value === undefined || value === "") return "â€”";
     if (field.field_type !== "select") return value;
     const option = field.options.find((candidate) => String(candidate.id) === value);
     return option?.label ?? "Removed choice";
@@ -190,7 +190,7 @@ const CELL_BUTTON_CLASS =
 
 /**
  * A custom `select` answer as the module's chip: a live choice tints from and glyphs with its own
- * stored colour and icon. The icon is the option's identity — omitting it is what made every custom
+ * stored colour and icon. The icon is the option's identity â€” omitting it is what made every custom
  * column render the same fallback ring while the configuration list showed the real glyphs.
  */
 function FieldChoiceChip({ field, value }: { field: TaskField; value: string | null }) {
@@ -222,7 +222,7 @@ function FieldChoiceChip({ field, value }: { field: TaskField; value: string | n
 }
 
 export interface TaskRowProps {
-    /** The assembled node — `depth` is the true level and drives both `aria-level` and the gutter. */
+    /** The assembled node â€” `depth` is the true level and drives both `aria-level` and the gutter. */
     node: TreeNode<TaskRowView>;
     /** 1-based position among this node's siblings (`aria-posinset`). */
     posInSet: number;
@@ -246,7 +246,7 @@ export interface TaskRowProps {
     frozenColumns?: FrozenTaskColumnOffsets;
     /** The department's custom columns, rendered as extra cells after the status column. */
     fields?: readonly TaskField[];
-    /** The department's catalogs — the status/priority editors' only source of options. */
+    /** The department's catalogs â€” the status/priority editors' only source of options. */
     catalogs?: TaskCatalogs;
     members?: readonly CellMemberOption[];
     /**
@@ -254,7 +254,7 @@ export interface TaskRowProps {
      * Kept on the module so only ONE cell is ever open; a second click replaces it.
      */
     editingCell?: { readonly taskId: number; readonly column: string } | null;
-    /** Optimistic display patches, keyed `"<taskId>:<column>"` — empty when nothing is saving. */
+    /** Optimistic display patches, keyed `"<taskId>:<column>"` â€” empty when nothing is saving. */
     cellPatches?: ReadonlyMap<string, TaskRowPatch>;
     /** Opens this row's cell editor. Absent (or `can_edit: false`) renders no edit affordance. */
     onStartCellEdit?: (taskId: number, column: string) => void;
@@ -264,7 +264,7 @@ export interface TaskRowProps {
     onCommitCellEdit?: (taskId: number, column: string, request: CellEditRequest) => void;
     /**
      * Opens this row's tag modal. Absent (or `can_edit: false`) leaves the Tags cell a read-only
-     * stack — the same rule the assignees cell follows.
+     * stack â€” the same rule the assignees cell follows.
      */
     onEditTags?: (taskId: number) => void;
     /**
@@ -274,15 +274,29 @@ export interface TaskRowProps {
     onAddSubtask?: (taskId: number) => void;
     /**
      * The dnd-kit handle, supplied by the sortable wrapper. Kept as a slot so the row itself stays
-     * presentational and never imports drag machinery — a row rendered without it is still a row.
+     * presentational and never imports drag machinery â€” a row rendered without it is still a row.
      */
     dragHandle?: ReactNode;
     /** Forwarded to the `<tr>` so the sortable wrapper can measure and transform it. */
     rowRef?: Ref<HTMLTableRowElement>;
     /** Inline transform/transition from `useSortable`; empty for a plain render. */
     rowStyle?: CSSProperties;
-    /** Drag-state and drop-indicator classes merged onto the row — the row supplies nothing itself. */
+    /** Drag-state classes merged onto the row â€” the row supplies nothing itself. */
     rowClassName?: string;
+    /**
+     * The drag activator's listeners, supplied by the sortable wrapper and spread on the `<tr>`.
+     *
+     * The WHOLE ROW is the activator on purpose: the user grabs the task name they are already
+     * looking at, instead of aiming at a small grip in a gutter. Spread before the row's own
+     * `role`/`aria-*` so the row keeps announcing itself as a row after a screen reader is told
+     * "press space to pick up".
+     */
+    rowListeners?: HTMLAttributes<HTMLTableRowElement>;
+    /**
+     * The drop line this row carries, and which edge of it the line sits on. `null` on every row a
+     * drag is not pointing into. One line, not a marker per intent: its distance from the left edge IS
+     * the level a drop applies, so "where" and "how deep" are read from the same mark.
+     */
 }
 
 /**
@@ -297,7 +311,7 @@ export interface TaskRowProps {
  * When the server says the row `can_edit`, each data cell becomes an editable cell: clicking it
  * swaps the display for the column's own picker (see `TaskCellEditor`), and the row shows the new
  * value optimistically while the module saves it. The expand chevron lives in a
- * different cell and is a plain control — clicking it never opens an editor.
+ * different cell and is a plain control â€” clicking it never opens an editor.
  */
 export function TaskRow({
     node,
@@ -322,6 +336,7 @@ export function TaskRow({
     rowRef,
     rowStyle,
     rowClassName,
+    rowListeners,
 }: TaskRowProps) {
     const indentDepth = Math.min(node.depth, MAX_INDENT_DEPTH);
     const subtaskCount = node.children.length;
@@ -342,7 +357,7 @@ export function TaskRow({
     const startDate = patched(patchFor("start"), "start_date", node.start_date);
     const endDate = patched(patchFor("due"), "end_date", node.end_date);
 
-    // An edit affordance only exists when the row is editable AND the module wired the handlers —
+    // An edit affordance only exists when the row is editable AND the module wired the handlers â€”
     // a read-only row (or one rendered from fixtures) stays exactly as it was before.
     const editable =
         node.can_edit &&
@@ -372,6 +387,7 @@ export function TaskRow({
 
     return (
         <TableRow
+            {...rowListeners}
             ref={rowRef}
             style={rowStyle}
             role="row"
@@ -383,7 +399,7 @@ export function TaskRow({
             aria-posinset={posInSet}
             aria-setsize={setSize}
             aria-expanded={hasChildren ? isExpanded : undefined}
-            className={cn("group/row", rowClassName)}
+            className={cn("group/row relative", rowClassName)}
         >
             <TableCell
                 style={expandFrozenLeft === undefined ? undefined : { left: expandFrozenLeft }}
@@ -392,17 +408,36 @@ export function TaskRow({
                     "w-10",
                 )}
             >
-                <div className="flex items-center justify-center">{dragHandle}</div>
+                                {null}
             </TableCell>
 
             <TableCell
+                data-slot="task-title-cell"
                 style={titleFrozenLeft === undefined ? undefined : { left: titleFrozenLeft }}
-                className={
+                className={cn(
+                    "relative",
                     titleFrozenLeft === undefined
                         ? undefined
-                        : cn(FROZEN_BODY_CELL_CLASS, FROZEN_EDGE_CLASS)
-                }
+                        : cn(FROZEN_BODY_CELL_CLASS, FROZEN_EDGE_CLASS),
+                )}
             >
+                {/*
+                 * The grip belongs to the row's own level: it appears at the x this row's chevron
+                 * occupies, one step to its left, so a deep row's drag affordance reads as part of that
+                 * row instead of a column of dots down the left edge. Hover-only, because the whole row
+                 * is the activator - the grip is an affordance, never the only target.
+                 */}
+                {dragHandle === undefined ? null : (
+                    <span
+                        aria-hidden="true"
+                        className="absolute top-1/2 z-10 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100"
+                        style={{
+                            left: `max(0px, calc(min(${indentDepth * INDENT_STEP_PX}px, max(0px, calc(100% - ${TITLE_CHROME_PX + TITLE_MIN_TEXT_PX}px))) - 18px))`,
+                        }}
+                    >
+                        {dragHandle}
+                    </span>
+                )}
                 <div
                     className={cn(
                         "relative flex items-center gap-1.5",
@@ -447,7 +482,7 @@ export function TaskRow({
                      * The badge sits in a reserved fixed-width slot on EVERY row, not only the rows
                      * that own one. A parent's leading group is [count][status][title] while a leaf's
                      * is [status][title], so without the slot a leaf's status glyph and title start
-                     * one badge-width to the LEFT of its parent's — cancelling the level step and
+                     * one badge-width to the LEFT of its parent's â€” cancelling the level step and
                      * making the two levels look aligned. The slot keeps one baseline across a level.
                      */}
                     <span className="flex w-6 shrink-0 items-center justify-center">
@@ -464,7 +499,7 @@ export function TaskRow({
                         ) : null}
                     </span>
                     {/*
-                     * The leading status glyph — after the subtask badge, before the title.
+                     * The leading status glyph â€” after the subtask badge, before the title.
                      * Only a resolved FK draws one: an unresolved status already renders its own
                      * placeholder chip in the status column, so an empty slot here would merely
                      * shift the title. `density="dense"` holds the 20px row and the title truncates
@@ -572,7 +607,7 @@ export function TaskRow({
             {/*
              * The assignees cell is DISPLAY ONLY: it shows the compact avatar stack. Clicking it
              * requests the assignees edit, which the module answers with the centered assignees
-             * dialog — never an inline picker in this 160px column (a wrapping chip field here is
+             * dialog â€” never an inline picker in this 160px column (a wrapping chip field here is
              * exactly what made the row tall and clumped before).
              *
              * Centred with its header label: the avatars are a horizontal cluster, so a centred

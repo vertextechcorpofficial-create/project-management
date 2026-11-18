@@ -1,98 +1,58 @@
-﻿/**
- * Pure geometry and destination logic for the task tree's drag-and-drop engine.
+/**
+ * Pure logic for the task tree's drag-and-drop.
  *
- * Everything dnd-kit-aware lives in `TreeDndProvider`; this file holds only the decisions that can
- * be reasoned about without a DOM — the three-zone drop intent, the destination parent, the
- * neighbour clamp, which rows are legal targets, and the `{ parent_id, sibling_ids }` payload a drop
- * resolves to. Keeping it separate is what makes the engine fixture-assertable:
- * `tree-dnd/__assert.ts` feeds it the same calls the provider's handlers make.
- *
- * MODEL: the drop INTENT carries the hierarchy decision. The pointer's vertical position inside the
- * hovered row picks one of three zones — top third = insert BEFORE, middle third = become CHILD
- * (nest), bottom third = insert AFTER — with a small hysteresis band so the intent does not flicker
- * at a zone edge. There is no horizontal-offset depth channel: "into vs between" IS the depth choice.
- *
- * A before/after drop reorders among the hovered row's siblings (its destination parent is the
- * hovered row's own parent); a nest drop re-parents the dragged row under the hovered row. Depth is
- * clamped by NEIGHBOURS — `minDepth = nextItem.depth`, `maxDepth = previousItem.depth + 1`, parent
- * derived from the row above the gap — never by the hovered row's ancestry. Neighbours are read from
- * the LIVE visible list (the dragged row is left in place), because the rendered list does not
- * reflow mid-drag: that is the list the indicator is drawn against, and reading it is what keeps a
- * shown indicator from resolving to no payload. The only structural rule left is the CYCLE GUARD:
- * the dragged node and every descendant of it are never legal targets.
- *
- * This file imports nothing and uses only erasable syntax (no `enum`, no `namespace`, no parameter
- * properties) so `__assert.ts` can load it through Node's native type stripping.
+ * The model is the reference mockup's (`pm/drag&drop/task-dnd-preview.html`), not dnd-kit's sortable
+ * model: the pointer's vertical position picks the GAP a row would land in, its horizontal travel
+ * picks the LEVEL, and the dragged row leaves the list while it travels. Everything here is a function
+ * of plain data, so the whole decision path is covered by `__assert.ts` without a browser.
  */
 
-/** The minimum row shape the engine needs; a full `TaskRowView` satisfies it structurally. */
+/** The columns of a task this logic needs: identity, parent, order in the parent's list. */
 export interface DndRow {
     readonly id: number;
     readonly parent_id: number | null;
     readonly sort_order: number;
 }
 
-/**
- * A row carrying its TRUE computed depth, as `flattenVisible` returns it (see `utils/tree.ts`).
- *
- * Depth is structural and is never capped here — the visual indent cap is presentation only, so a
- * level-12 row keeps `depth: 12` and only renders flush with level 8.
- */
-export interface FlatRow extends DndRow {
-    readonly depth: number;
-}
-
-/** Where a drop lands relative to the row under the pointer: above it, inside it, or below it. */
-export type DropIntent = "before" | "nest" | "after";
-
-/** The pinned reorder/re-parent write contract: the destination parent plus its ordered child list. */
+/** The write payload the move route accepts: the destination parent and its COMPLETE child order. */
 export interface MovePayload {
-    parent_id: number | null;
-    sibling_ids: number[];
+    readonly parent_id: number | null;
+    readonly sibling_ids: number[];
 }
 
-/**
- * The three zones, as fractions of the hovered row's height. The middle third is the nest zone; the
- * two outer thirds are the sibling-insert zones. `INTENT_HYSTERESIS` widens a zone's edge while that
- * zone is already active, so a pointer resting on a boundary cannot alternate between two intents.
- */
-export const NEST_ZONE_START = 1 / 3;
-export const NEST_ZONE_END = 2 / 3;
-export const INTENT_HYSTERESIS = 0.08;
-
-/** The cycle Right/Left steps through: top zone, middle zone, bottom zone, wrapping. */
-const INTENT_CYCLE: readonly DropIntent[] = ["before", "nest", "after"];
-
-/** Sibling order is `(sort_order, id)` — the order every read path returns and a write must match. */
+/** Rows come back from the API in no particular order, so every list is sorted by the persisted key. */
 function bySortOrder(a: DndRow, b: DndRow): number {
-    return a.sort_order - b.sort_order || a.id - b.id;
-}
-
-/** The current parent of `id`, or `null` when the row is a root or absent from the set. */
-function parentOf(rows: readonly DndRow[], id: number): number | null {
-    const row = rows.find((candidate) => candidate.id === id);
-    return row === undefined ? null : row.parent_id;
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    return a.id - b.id;
 }
 
 /**
- * Answers the cycle guard: would making `parentId` the parent of `activeId` close a loop?
+ * True when `parentId` is the moved row itself or sits underneath it.
  *
- * `isDescendant` in `utils/tree.ts` is deliberately strict (`isDescendant(x, x) === false`), so the
- * self-parent case is rejected explicitly here rather than relied on to fall out of the walk.
- * Cycle-safe: a loop in the data terminates instead of hanging.
+ * This is the one structural refusal a re-parent must make: dropping a task inside its own descendant
+ * would detach that subtree from the tree. Everything else — a new parent, another level, the root —
+ * is legal.
  */
-export function isCycleTarget(rows: readonly DndRow[], activeId: number, parentId: number | null): boolean {
+export function isCycleTarget(
+    rows: readonly DndRow[],
+    activeId: number,
+    parentId: number | null,
+): boolean {
     if (parentId === null) return false;
     if (parentId === activeId) return true;
 
-    const seen = new Set<number>();
-    let cursor = rows.find((row) => row.id === parentId);
-    while (cursor !== undefined && !seen.has(cursor.id)) {
-        seen.add(cursor.id);
-        const { parent_id: nextParentId } = cursor;
-        if (nextParentId === null) return false;
-        if (nextParentId === activeId) return true;
-        cursor = rows.find((row) => row.id === nextParentId);
+    const parentOf = new Map<number, number | null>();
+    for (const row of rows) parentOf.set(row.id, row.parent_id);
+
+    let cursor: number | null = parentId;
+    const seen = new Set<number>([parentId]);
+    while (cursor !== null) {
+        if (cursor === activeId) return true;
+        const next: number | null = parentOf.get(cursor) ?? null;
+        if (next === null) return false;
+        if (seen.has(next)) return false;
+        seen.add(next);
+        cursor = next;
     }
     return false;
 }
@@ -100,9 +60,9 @@ export function isCycleTarget(rows: readonly DndRow[], activeId: number, parentI
 /**
  * The destination parent's ordered live child ids with the moved node removed.
  *
- * The subtraction matters: before the write the moved node is not yet a child of the target parent,
- * so a caller that wants the post-move list must splice it back in — which is exactly the
- * membership rule the move route applies. Passing `excludeId` here keeps that logic in one place.
+ * The subtraction matters: before the write the moved node is not yet a child of the target parent, so
+ * a caller that wants the post-move list must splice it back in — which is exactly the membership rule
+ * the move route applies. Passing `excludeId` here keeps that logic in one place.
  */
 export function listChildIds(
     rows: readonly DndRow[],
@@ -132,174 +92,120 @@ export function computeMovePayload(
 
     const children = listChildIds(rows, parentId, activeId);
     const index = Math.max(0, Math.min(insertIndex, children.length));
-    const siblingIds = [...children.slice(0, index), activeId, ...children.slice(index)];
-    return { parent_id: parentId, sibling_ids: siblingIds };
+    return { parent_id: parentId, sibling_ids: [...children.slice(0, index), activeId, ...children.slice(index)] };
 }
 
-/** Inputs for the three-zone decision. `rectHeight === 0` (unmeasured) falls back to insert-after. */
-export interface DropIntentInput {
-    readonly pointerY: number;
-    readonly rectTop: number;
-    readonly rectHeight: number;
-    /**
-     * The intent currently shown. Its zone keeps its edge widened by `INTENT_HYSTERESIS`, so a
-     * pointer hovering a boundary holds one intent instead of oscillating. `null` (a fresh hover)
-     * resolves on the plain thirds.
-     */
-    readonly previous?: DropIntent | null;
+/* ------------------------------------------------------------------ */
+/*  Pointer model                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The deepest level a drag may project. The tree itself is unbounded; this only stops a sideways drag
+ * from promising a level the list would render flush anyway.
+ */
+export const MAX_PROJECTED_DEPTH = 12;
+
+/** A row as the pointer engine sees it: render order, true depth, real parent. */
+export interface PointerRow {
+    readonly id: number;
+    readonly parentId: number | null;
+    readonly depth: number;
+}
+
+/** A measured row rect in viewport coordinates. */
+export interface RowRect {
+    readonly top: number;
+    readonly height: number;
 }
 
 /**
- * Resolves the drop intent from which third of the `over` rect the pointer is in.
+ * Which gap the pointer is in, counted against row CENTRES.
  *
- * Boundaries: a pointer at exactly one third reads as nest (the middle zone owns its lower edge) and
- * at exactly two thirds reads as after (the lower zone owns its edge). An unmeasured rect defaults
- * to insert-after — an unknown target must not silently nest.
+ * The dragged row is already out of the list when this runs, so the result indexes the rows the user
+ * can actually see: `0` is the gap above the first row and `rects.length` the gap after the last. A row
+ * counts as "passed" once the pointer is below its midpoint, which is what makes the line move halfway
+ * through a row instead of only at its edges.
  */
-export function resolveDropIntent(input: DropIntentInput): DropIntent {
-    const { pointerY, rectTop, rectHeight, previous = null } = input;
-
-    if (rectHeight <= 0) return "after";
-
-    const ratio = (pointerY - rectTop) / rectHeight;
-
-    const lowerEdge =
-        previous === "before"
-            ? NEST_ZONE_START + INTENT_HYSTERESIS
-            : previous === "nest"
-              ? NEST_ZONE_START - INTENT_HYSTERESIS
-              : NEST_ZONE_START;
-    const upperEdge =
-        previous === "after"
-            ? NEST_ZONE_END - INTENT_HYSTERESIS
-            : previous === "nest"
-              ? NEST_ZONE_END + INTENT_HYSTERESIS
-              : NEST_ZONE_END;
-
-    if (ratio < lowerEdge) return "before";
-    if (ratio < upperEdge) return "nest";
-    return "after";
+export function pointerGapIndex(rects: readonly RowRect[], pointerY: number): number {
+    let index = 0;
+    for (const rect of rects) {
+        if (rect.top + rect.height / 2 < pointerY) index += 1;
+    }
+    return index;
 }
 
-/**
- * Steps the intent around the three-zone ring: `before → nest → after → before`.
- *
- * The ring follows the row's geometry (top, middle, bottom, wrapping), so Right always moves the
- * intent downward through the drop zones and Left moves it upward. This is the keyboard's whole
- * depth decision now: Left/Right choose between "between" and "into" instead of nudging an offset.
- */
-export function cycleDropIntent(current: DropIntent, direction: 1 | -1): DropIntent {
-    const index = INTENT_CYCLE.indexOf(current);
-    const next = (index + direction + INTENT_CYCLE.length) % INTENT_CYCLE.length;
-    return INTENT_CYCLE[next];
+/** Inputs for the slot projection. */
+export interface SlotProjectionInput {
+    /** Visible rows in render order, WITHOUT the dragged row. */
+    readonly rows: readonly PointerRow[];
+    /** The dragged row's depth when it was picked up — the base the sideways travel is added to. */
+    readonly activeDepth: number;
+    /** Sideways travel from the grab point, in pixels. */
+    readonly offsetX: number;
+    /** Gap index from `pointerGapIndex`. */
+    readonly index: number;
+    /** Pixels of sideways travel that mean one level. */
+    readonly indentWidth: number;
+    /** Ceiling on the level a drag may promise. */
+    readonly maxDepth?: number;
 }
 
-/** Inputs for resolving a concrete drop destination. */
-export interface DropDestinationInput {
-    /** Visible rows in render order, carrying true depth. */
-    readonly visibleRows: readonly FlatRow[];
-    /** The complete flat row set — used for sibling lists and the cycle guard. */
-    readonly allRows: readonly DndRow[];
-    readonly activeId: number;
-    readonly overId: number;
-    readonly intent: DropIntent;
-}
-
-/** A valid drop: the depth that will be applied, its parent, and the payload that applies it. */
-export interface DropDestination {
+/** The slot a drop would take: which gap, which level, which parent. */
+export interface SlotProjection {
+    readonly index: number;
     readonly depth: number;
     readonly parentId: number | null;
-    readonly payload: MovePayload;
 }
 
 /**
- * Resolves the hovered row and intent into the destination parent, depth and payload.
+ * The reference's `project()`: the gap picks the neighbours, the sideways travel picks the level.
  *
- * - `nest` targets the hovered row itself and appends the moved node as its last child.
- * - `before`/`after` target the gap above/below the hovered row; the desired depth is the hovered
- *   row's own level, then CLAMPED BY NEIGHBOURS: `minDepth = nextItem.depth` (the row below the gap
- *   can never end up beneath the moved node) and `maxDepth = previousItem.depth + 1` (the row above
- *   caps how deep the gap can be). The parent is the nearest row above the gap at `depth - 1`, so a
- *   bottom-third drop on an expanded parent lands as its first child, and a top-level gap yields
- *   `parent_id: null`.
- *
- * The hovered row's ancestry is never consulted. The cycle guard is the only refusal: a drop onto
- * the dragged node or any descendant returns `null`.
+ * A gap can only accept a level between its neighbours — never deeper than one under the row above
+ * (`previous.depth + 1`), never shallower than the row below (`next.depth`) — so the list can never be
+ * orphaned by a drop. The parent then falls out of the row above: same level means sharing its parent,
+ * one deeper means becoming its child, shallower means walking back to the row that owns that level.
  */
-export function resolveDropDestination(input: DropDestinationInput): DropDestination | null {
-    const { visibleRows, allRows, activeId, overId, intent } = input;
+export function projectDropSlot(input: SlotProjectionInput): SlotProjection {
+    const { rows, activeDepth, offsetX, index, indentWidth, maxDepth = MAX_PROJECTED_DEPTH } = input;
+    const previous = index > 0 ? rows[index - 1] : undefined;
+    const next = index < rows.length ? rows[index] : undefined;
 
-    if (overId === activeId) return null;
-    if (isCycleTarget(allRows, activeId, overId)) return null;
-
-    const overIndex = visibleRows.findIndex((row) => row.id === overId);
-    if (overIndex === -1) return null;
-    const overDepth = visibleRows[overIndex].depth;
-
-    if (intent === "nest") {
-        const children = listChildIds(allRows, overId, activeId);
-        return {
-            depth: overDepth + 1,
-            parentId: overId,
-            payload: { parent_id: overId, sibling_ids: [...children, activeId] },
-        };
-    }
-
-    // The gap is the boundary the indicator is drawn on, read from the list the user is looking at.
-    // The dragged row is deliberately NOT removed: the rendered list does not reflow mid-drag, so
-    // removing it here would compute neighbours (and sometimes a missing parent) that the indicator
-    // never showed — the exact preview/result divergence this resolver exists to eliminate.
-    const gap = intent === "before" ? overIndex : overIndex + 1;
-    const previousItem = gap > 0 ? visibleRows[gap - 1] : undefined;
-    const nextItem = gap < visibleRows.length ? visibleRows[gap] : undefined;
-
-    const minDepth = nextItem === undefined ? 0 : nextItem.depth;
-    const maxDepth = previousItem === undefined ? 0 : previousItem.depth + 1;
-    const depth = Math.max(minDepth, Math.min(overDepth, maxDepth));
+    const ceiling = previous === undefined ? 0 : Math.min(previous.depth + 1, maxDepth);
+    const floor = next === undefined ? 0 : next.depth;
+    const travelled = activeDepth + Math.round(offsetX / Math.max(1, indentWidth));
+    const depth = Math.max(floor, Math.min(ceiling, travelled));
 
     let parentId: number | null = null;
-    if (depth > 0) {
-        for (let index = gap - 1; index >= 0; index -= 1) {
-            if (visibleRows[index].depth === depth - 1) {
-                parentId = visibleRows[index].id;
-                break;
+    if (depth > 0 && previous !== undefined) {
+        if (depth === previous.depth) {
+            parentId = previous.parentId;
+        } else if (depth > previous.depth) {
+            parentId = previous.id;
+        } else {
+            for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+                if (rows[cursor].depth === depth) {
+                    parentId = rows[cursor].parentId;
+                    break;
+                }
             }
         }
-        if (parentId === null) return null;
-        if (isCycleTarget(allRows, activeId, parentId)) return null;
     }
 
-    // Anchor on the destination parent's last child above the gap, so splicing after it puts the
-    // moved node exactly where the insertion line is drawn.
-    const children = listChildIds(allRows, parentId, activeId);
-    let insertIndex = 0;
-    for (let index = gap - 1; index >= 0; index -= 1) {
-        const row = visibleRows[index];
-        if (parentOf(allRows, row.id) !== parentId) continue;
-        const position = children.indexOf(row.id);
-        if (position !== -1) {
-            insertIndex = position + 1;
-            break;
-        }
-    }
-
-    const payload = computeMovePayload(allRows, activeId, parentId, insertIndex);
-    if (payload === null) return null;
-    return { depth, parentId, payload };
+    return { index, depth, parentId };
 }
 
 /**
- * Every row a drag may legally target: all rows except the dragged node and its descendants.
- *
- * `TreeDndProvider` scopes its collision candidates to this set so `over` can never resolve onto a
- * cycle target. The dragged row itself is excluded too, so a drop is never a self-drop.
+ * Where the moved node lands inside its new parent's child list: one slot after the last child that
+ * sits above the gap, or first when none does. `rows` is the visible order without the dragged row.
  */
-export function droppableTargetIds(rows: readonly DndRow[], activeId: number): Set<number> {
-    const ids = new Set<number>();
-    for (const row of rows) {
-        if (row.id === activeId) continue;
-        if (isCycleTarget(rows, activeId, row.id)) continue;
-        ids.add(row.id);
+export function childInsertIndex(
+    rows: readonly PointerRow[],
+    index: number,
+    parentId: number | null,
+): number {
+    let count = 0;
+    for (let cursor = 0; cursor < index && cursor < rows.length; cursor += 1) {
+        if (rows[cursor].parentId === parentId) count += 1;
     }
-    return ids;
+    return count;
 }
