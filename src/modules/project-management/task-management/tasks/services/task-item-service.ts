@@ -332,9 +332,10 @@ export class TaskItemService {
             readonly id?: unknown;
             readonly parent_id?: unknown;
             readonly sort_order?: unknown;
+            readonly list_id?: unknown;
         }>("pm_task", {
             filter: { department_id: { _eq: actor.departmentId }, is_deleted: { _eq: 0 } },
-            fields: ["id", "parent_id", "sort_order"],
+            fields: ["id", "parent_id", "sort_order", "list_id"],
             limit: -1,
         });
 
@@ -346,6 +347,7 @@ export class TaskItemService {
                 id,
                 parent_id: toNumberOrNull(row.parent_id),
                 sort_order: toNumberOrNull(row.sort_order) ?? 0,
+                list_id: toNumberOrNull(row.list_id),
             });
         }
         return treeRows;

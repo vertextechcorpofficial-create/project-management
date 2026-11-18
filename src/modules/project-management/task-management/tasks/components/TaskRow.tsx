@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useCallback, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { ChevronRight, Pencil, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -106,7 +106,24 @@ export const MAX_INDENT_DEPTH = 8;
  * freezing early. Past that point the icon pins and the name keeps its stub — the row never spills
  * into the next column, and the level step stops rather than the text vanishing.
  */
-export const INDENT_STEP_PX = 20;
+export const INDENT_STEP_PX = 26;
+
+/**
+ * The gutter the grip lives in, left of the row's leading glyph, in pixels.
+ *
+ * Every row reserves it, so the grip never sits against the cell edge at depth 0 and never drifts
+ * with depth: it is always the same distance from the first thing the row draws.
+ */
+export const GRIP_GUTTER_PX = 18;
+
+/**
+ * Breathing room between the cell's left edge and the row's first pixel of content, in pixels.
+ *
+ * Depth 0 has no indent of its own, so without this a top-level name sits flush against the column
+ * border while every child has room to breathe. It is added to the indent, not folded into the grip
+ * gutter, because the grip must stay a fixed distance from the glyph it precedes.
+ */
+export const TITLE_LEFT_PAD_PX = 8;
 
 /**
  * The leading group a row draws before its name, in pixels: the 24px chevron slot, its 6px gap, the
@@ -281,8 +298,22 @@ export interface TaskRowProps {
     rowRef?: Ref<HTMLTableRowElement>;
     /** Inline transform/transition from `useSortable`; empty for a plain render. */
     rowStyle?: CSSProperties;
-    /** Drag-state and drop-indicator classes merged onto the row — the row supplies nothing itself. */
+    /** Drag-state classes merged onto the row — the row supplies nothing itself. */
     rowClassName?: string;
+    /**
+     * The drag activator's listeners, supplied by the sortable wrapper and spread on the `<tr>`.
+     *
+     * The WHOLE ROW is the activator on purpose: the user grabs the task name they are already
+     * looking at, instead of aiming at a small grip in a gutter. Spread before the row's own
+     * `role`/`aria-*` so the row keeps announcing itself as a row after a screen reader is told
+     * "press space to pick up".
+     */
+    rowListeners?: HTMLAttributes<HTMLTableRowElement>;
+    /**
+     * The drop line this row carries, and which edge of it the line sits on. `null` on every row a
+     * drag is not pointing into. One line, not a marker per intent: its distance from the left edge IS
+     * the level a drop applies, so "where" and "how deep" are read from the same mark.
+     */
 }
 
 /**
@@ -322,12 +353,12 @@ export function TaskRow({
     rowRef,
     rowStyle,
     rowClassName,
+    rowListeners,
 }: TaskRowProps) {
     const indentDepth = Math.min(node.depth, MAX_INDENT_DEPTH);
     const subtaskCount = node.children.length;
     const subtaskLabel = `${subtaskCount} sub-task${subtaskCount === 1 ? "" : "s"}`;
     const expandLabel = isExpanded ? `Collapse ${node.title}` : `Expand ${node.title}`;
-    const expandFrozenLeft = frozenColumns?.expand;
     const titleFrozenLeft = frozenColumns?.title;
 
     const patchFor = useCallback(
@@ -370,8 +401,25 @@ export function TaskRow({
         [onCommitCellEdit, node.id],
     );
 
+    /*
+     * The grip is the same element in both positions: before the chevron when the row has children,
+     * before the status glyph when it does not. Zero-width so it never moves content, drawn 18px to
+     * the left of whatever it precedes, which is what keeps its distance constant.
+     */
+    const gripSlot =
+        dragHandle === undefined ? null : (
+            <span
+                aria-hidden="true"
+                className="relative -mr-1.5 w-0 shrink-0 opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100"
+            >
+                <span className="pointer-events-auto absolute top-1/2 -translate-x-[18px] -translate-y-1/2">
+                    {dragHandle}
+                </span>
+            </span>
+        );
     return (
         <TableRow
+            {...rowListeners}
             ref={rowRef}
             style={rowStyle}
             role="row"
@@ -383,25 +431,17 @@ export function TaskRow({
             aria-posinset={posInSet}
             aria-setsize={setSize}
             aria-expanded={hasChildren ? isExpanded : undefined}
-            className={cn("group/row", rowClassName)}
+            className={cn("group/row relative", rowClassName)}
         >
             <TableCell
-                style={expandFrozenLeft === undefined ? undefined : { left: expandFrozenLeft }}
-                className={cn(
-                    expandFrozenLeft === undefined ? undefined : FROZEN_BODY_CELL_CLASS,
-                    "w-10",
-                )}
-            >
-                <div className="flex items-center justify-center">{dragHandle}</div>
-            </TableCell>
-
-            <TableCell
+                data-slot="task-title-cell"
                 style={titleFrozenLeft === undefined ? undefined : { left: titleFrozenLeft }}
-                className={
+                className={cn(
+                    "relative",
                     titleFrozenLeft === undefined
                         ? undefined
-                        : cn(FROZEN_BODY_CELL_CLASS, FROZEN_EDGE_CLASS)
-                }
+                        : cn(FROZEN_BODY_CELL_CLASS, FROZEN_EDGE_CLASS),
+                )}
             >
                 <div
                     className={cn(
@@ -409,7 +449,7 @@ export function TaskRow({
                         isContext ? "text-muted-foreground" : undefined,
                     )}
                     style={{
-                        paddingLeft: `min(${indentDepth * INDENT_STEP_PX}px, max(0px, calc(100% - ${TITLE_CHROME_PX + TITLE_MIN_TEXT_PX}px)))`,
+                        paddingLeft: `min(${indentDepth * INDENT_STEP_PX + GRIP_GUTTER_PX + TITLE_LEFT_PAD_PX}px, max(0px, calc(100% - ${TITLE_CHROME_PX + TITLE_MIN_TEXT_PX}px)))`,
                     }}
                 >
                     {/*
@@ -418,6 +458,7 @@ export function TaskRow({
                      * left the reader clicking a control disconnected from its row. A leaf reserves
                      * the same 24px so siblings at one level still share a baseline.
                      */}
+                    {hasChildren ? gripSlot : null}
                     {hasChildren ? (
                         <Button
                             type="button"
@@ -470,7 +511,8 @@ export function TaskRow({
                      * shift the title. `density="dense"` holds the 20px row and the title truncates
                      * against the column's own width, so widening the column reveals more of it.
                      */}
-                    {status !== null ? (
+                                        {hasChildren ? null : gripSlot}
+{status !== null ? (
                         <CatalogStatusIcon
                             icon={status.icon}
                             color={status.color}

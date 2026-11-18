@@ -18,6 +18,11 @@ export interface TreeSourceRow {
     readonly id: number;
     readonly parent_id: number | null;
     readonly sort_order: number;
+    /**
+     * The owning list, selected only by callers that need it — the move route scopes its
+     * completeness rule to one list. Optional so callers that never read it stay unchanged.
+     */
+    readonly list_id?: number | null;
 }
 
 /** A row enriched during assembly. `depth` is computed here, never stored in the database. */

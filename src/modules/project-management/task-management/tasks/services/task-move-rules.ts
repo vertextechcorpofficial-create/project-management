@@ -20,6 +20,26 @@
 export interface MoveChildRow {
     readonly id: number;
     readonly parent_id: number | null;
+    /** Present when the caller loaded rows with it; `null` is a task with no list. */
+    readonly list_id?: number | null;
+}
+
+/**
+ * Narrows the department's rows to the ONE list a move may renumber.
+ *
+ * `sort_order` is per list: `moveTask` writes `sort_order = index` only for the ids it was sent, and
+ * every sibling it sends belongs to the moved task's list (a cross-list parent is refused outright).
+ * So completeness must be judged against that list's children — root is `parent_id: null` **in this
+ * list**, not every root in the department. Judging against the whole department is what made
+ * "promote this task to the top level" fail with "the sibling list must be the target parent's
+ * complete child list": the client can only name roots it can see, and it sees one list.
+ */
+export function scopeToMoveList<T extends MoveChildRow>(
+    rows: readonly T[],
+    listId: number | null,
+): T[] {
+    if (listId === null) return [...rows];
+    return rows.filter((row) => (row.list_id ?? null) === listId);
 }
 
 /** "Does the ordered list name `id` exactly once?" An absent or repeated moved node is refused. */
@@ -40,7 +60,7 @@ export function containsExactlyOnce(ids: readonly number[], id: number): boolean
  * not checked — the array's order IS the order to write (each entry's index becomes its
  * `sort_order`), while completeness is a set question.
  *
- * @param rows       The department's live rows (`id`, `parent_id`).
+ * @param rows       The moved task's list's live rows (`id`, `parent_id`) — pass them through `scopeToMoveList`.
  * @param movedId    The task being moved — added to the target's child set per the membership rule.
  * @param parentId   The destination parent; `null` means "root".
  * @param siblingIds The complete ordered child list the client computed after the move.
