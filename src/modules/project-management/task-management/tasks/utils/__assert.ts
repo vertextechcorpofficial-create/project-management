@@ -308,6 +308,67 @@ check(
 const multiRoot = pruneForest(roots, { matchesSearch: matchByIds([1, 5, 7]) });
 check("pruning preserves the source root order", sameIds(rootIds(multiRoot), [1, 5, 7]));
 
+// --- Revealing a match's own subtree ----------------------------------------------------------------
+// The reader opened a matched row, so its real children must appear even though they fail the rule
+// that matched the parent — that is the difference between "the filter picked this row" and "this
+// branch is the answer", and it is why `is not` keeps pruning inside a revealed branch.
+
+const sourceRoot = requireNode(roots, 1);
+const closedMatch = pruneForest(roots, { passesClauses: (row) => row.id === 1 });
+check(
+    "a matched parent starts without its children",
+    requireNode(closedMatch, 1).children.length === 0,
+);
+
+const openMatch = pruneForest(roots, {
+    passesClauses: (row) => row.id === 1,
+    revealSubtree: (row) => row.id === 1,
+});
+check(
+    "a revealed match keeps every child, matching or not",
+    sameIds(childIds(requireNode(openMatch, 1)), childIds(sourceRoot)) &&
+        childIds(requireNode(openMatch, 1)).length === 2,
+);
+check(
+    "a revealed subtree reaches grandchildren the filter would have dropped",
+    findNode(openMatch, 4) !== undefined && requireNode(openMatch, 3).children.length === 1,
+);
+check(
+    "revealing a context row opens nothing, because only matches offer the chevron",
+    (() => {
+        // Row 1 is kept only as the path to the match in row 3. Naming it in `revealSubtree` must not
+        // widen the match beneath it — the reveal is a press on a row that has hidden children, and a
+        // path row's children are already on screen.
+        const pathNamed = pruneForest(roots, {
+            passesClauses: (row) => row.id === 3,
+            revealSubtree: (row) => row.id === 1,
+        });
+        return requireNode(pathNamed, 3).children.length === 0;
+    })(),
+);
+check(
+    "an exclusion still prunes INSIDE a revealed branch",
+    findNode(
+        pruneForest(roots, { passesClauses: (row) => row.id === 1, failsExcludingClause: (row) => row.id === 3, revealSubtree: (row) => row.id === 1 }),
+        3,
+    ) === undefined,
+);
+check(
+    "a search hit the reader opened keeps its subtree",
+    findNode(pruneForest(roots, { matchesSearch: matchByIds([3]), revealSubtree: (row) => row.id === 3 }), 4) !== undefined,
+);
+check(
+    "an unopened search hit still has no children",
+    findNode(pruneForest(roots, { matchesSearch: matchByIds([3]) }), 3)?.children.length === 0,
+);
+check(
+    "reveal does not resurrect a branch an exclusion removed",
+    findNode(
+        pruneForest(roots, { failsExcludingClause: (row) => row.id === 1, revealSubtree: (row) => row.id === 1 }),
+        1,
+    ) === undefined,
+);
+
 // --- Completion rollup: fixtures ---------------------------------------------------------------------
 
 function near(actual: number | undefined, expected: number, tolerance: number = 1e-9): boolean {

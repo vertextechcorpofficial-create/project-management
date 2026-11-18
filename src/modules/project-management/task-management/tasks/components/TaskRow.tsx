@@ -246,6 +246,12 @@ export interface TaskRowProps {
     /** Number of siblings at this node's level (`aria-setsize`), taken from the full tree. */
     setSize: number;
     hasChildren: boolean;
+    /**
+     * Subtasks this row owns that the active filter is holding back. Non-zero means the chevron is
+     * still drawn — a matched parent must be openable — and the badge counts these instead of the
+     * children actually in the pruned node.
+     */
+    hiddenChildCount?: number;
     isExpanded: boolean;
     /**
      * True when the row is on-screen only as the ancestor path of a match beneath it. A filter never
@@ -340,6 +346,7 @@ export function TaskRow({
     posInSet,
     setSize,
     hasChildren,
+    hiddenChildCount = 0,
     isExpanded,
     isContext = false,
     onToggleExpand,
@@ -362,9 +369,18 @@ export function TaskRow({
     rowListeners,
 }: TaskRowProps) {
     const indentDepth = Math.min(node.depth, MAX_INDENT_DEPTH);
-    const subtaskCount = node.children.length;
-    const subtaskLabel = `${subtaskCount} sub-task${subtaskCount === 1 ? "" : "s"}`;
-    const expandLabel = isExpanded ? `Collapse ${node.title}` : `Expand ${node.title}`;
+    // A filtered row can hold subtasks the pruner removed, so the badge and the chevron count the
+    // real ones; without that a matched parent reads as a leaf and cannot be opened at all.
+    const subtaskCount = node.children.length > 0 ? node.children.length : hiddenChildCount;
+    const isHoldingHidden = node.children.length === 0 && hiddenChildCount > 0;
+    const subtaskLabel = `${subtaskCount} sub-task${subtaskCount === 1 ? "" : "s"}${
+        isHoldingHidden ? " hidden by the filter" : ""
+    }`;
+    const expandLabel = isExpanded
+        ? `Collapse ${node.title}`
+        : isHoldingHidden
+          ? `Show ${subtaskLabel} of ${node.title}`
+          : `Expand ${node.title}`;
     const titleFrozenLeft = frozenColumns?.title;
 
     const patchFor = useCallback(
