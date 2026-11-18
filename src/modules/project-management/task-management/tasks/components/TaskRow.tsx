@@ -256,6 +256,11 @@ export interface TaskRowProps {
     /** Slot for the row's overflow menu / actions. */
     actions?: ReactNode;
     /**
+     * Draws the column-resize strip inside a body cell, the twin of the one in the header. Supplied
+     * by `TaskTree`, which owns the width store; absent in a fixture render, where nothing resizes.
+     */
+    renderColumnResizeHandle?: (columnKey: string) => ReactNode;
+    /**
      * The frozen-column `left` offsets, when the wide table is pinning its leading columns. Absent
      * for a plain render (a fixture, a preview), which leaves the row exactly as it was: the two
      * leading cells only become sticky when the caller supplies geometry to stick them against.
@@ -339,6 +344,7 @@ export function TaskRow({
     isContext = false,
     onToggleExpand,
     actions,
+    renderColumnResizeHandle,
     frozenColumns,
     fields = [],
     catalogs,
@@ -581,6 +587,7 @@ export function TaskRow({
                         </>
                     )}
                 </div>
+                {renderColumnResizeHandle?.("title")}
             </TableCell>
 
             {/*
