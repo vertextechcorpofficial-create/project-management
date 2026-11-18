@@ -106,6 +106,9 @@ const NO_CELL_PATCHES: ReadonlyMap<string, TaskRowPatch> = new Map();
 /** Nothing is collapsed / expanded — one shared identity so the derived sets stay stable. */
 const EMPTY_ID_SET: ReadonlySet<number> = new Set();
 
+/** No row has hidden children — the unfiltered answer, shared so the prop identity stays stable. */
+const EMPTY_COUNT_MAP: ReadonlyMap<number, number> = new Map();
+
 /** The catalog ref an optimistic status/priority cell shows while the picked id is being saved. */
 function catalogRefFor(options: readonly TaskCatalogOption[], id: number): TaskCatalogRef | null {
     const option = options.find((candidate) => candidate.id === id);
@@ -528,6 +531,27 @@ export function TasksModule({ userId }: TasksModuleProps) {
         collapsedWhileFiltered.key === revealKey ? collapsedWhileFiltered.ids : EMPTY_ID_SET;
 
     /**
+     * Rows the reader OPENED under the current filter. A filter selects one row and nothing beneath
+     * it, which left a match with no way to inspect its contents short of dropping the filter; an
+     * opened match keeps its real subtree instead. Same lifetime as a collapse: it lapses when the
+     * filter changes, so an expansion never leaks into a different result set.
+     */
+    const [openedWhileFiltered, setOpenedWhileFiltered] = useState<{
+        readonly key: string;
+        readonly ids: ReadonlySet<number>;
+    }>({ key: "", ids: EMPTY_ID_SET });
+    const openedFilteredIds =
+        openedWhileFiltered.key === revealKey ? openedWhileFiltered.ids : EMPTY_ID_SET;
+
+    /** Open, and not folded again afterwards — folding a revealed row hides its branch again. */
+    const revealedIds = useMemo<ReadonlySet<number>>(() => {
+        if (openedFilteredIds.size === 0) return EMPTY_ID_SET;
+        const ids = new Set(openedFilteredIds);
+        for (const id of collapsedFilteredIds) ids.delete(id);
+        return ids;
+    }, [openedFilteredIds, collapsedFilteredIds]);
+
+    /**
      * The forest the List renders. Groups combine with AND; inside a group a positive row keeps its
      * subtree and an `is not` row drops its branch — and search reveals ancestors.
      */
@@ -536,9 +560,25 @@ export function TasksModule({ userId }: TasksModuleProps) {
         return pruneForest(roots, {
             passesClauses: (row) => rowMatchesFilter(row, appliedGroups, fields),
             failsExcludingClause: (row) => failsExcludingGroup(row, appliedGroups, fields),
+            revealSubtree: (row) => revealedIds.has(row.id),
             ...(term === "" ? {} : { matchesSearch: (row) => row.title.toLowerCase().includes(term) }),
         });
-    }, [roots, search, appliedGroups, fields]);
+    }, [roots, search, appliedGroups, fields, revealedIds]);
+
+    /**
+     * How many real subtasks each row has, for the rows whose children the filter is holding back.
+     * Without it a matched parent renders as a leaf — no chevron — which is the report that started
+     * this: "filtered parent tasks should be expandable".
+     */
+    const hiddenChildCount = useMemo<ReadonlyMap<number, number>>(() => {
+        if (!isFiltering) return EMPTY_COUNT_MAP;
+        const counts = new Map<number, number>();
+        for (const row of items) {
+            if (row.parent_id === null) continue;
+            counts.set(row.parent_id, (counts.get(row.parent_id) ?? 0) + 1);
+        }
+        return counts;
+    }, [items, isFiltering]);
 
     /**
      * Rows on screen only as the ancestor path of a match. A filter selects the rows it matches and
@@ -566,18 +606,19 @@ export function TasksModule({ userId }: TasksModuleProps) {
 
     /**
      * What the tree actually renders expanded. Without a filter it is the user's own set. WITH one,
-     * the filter reveals every match's ancestors — and any row the user folded away under that same
-     * filter stays folded, which is why a collapse used to look broken while filtering: the reveal
-     * was unioned back in on every render.
+     * the filter reveals every match's ancestors, plus any branch the reader opened by hand — and
+     * any row folded away under that same filter stays folded, which is why a collapse used to look
+     * broken while filtering: the reveal was unioned back in on every render.
      */
     const renderExpandedIds = useMemo<ReadonlySet<number>>(() => {
         if (!isFiltering) return expandedIds;
-        if (collapsedFilteredIds.size === 0) return autoExpandedIds;
+        if (collapsedFilteredIds.size === 0 && revealedIds.size === 0) return autoExpandedIds;
 
         const merged = new Set(autoExpandedIds);
+        for (const id of revealedIds) merged.add(id);
         for (const id of collapsedFilteredIds) merged.delete(id);
         return merged;
-    }, [isFiltering, expandedIds, autoExpandedIds, collapsedFilteredIds]);
+    }, [isFiltering, expandedIds, autoExpandedIds, collapsedFilteredIds, revealedIds]);
 
     /**
      * Every parent id in the WHOLE forest — the universe the `Subtasks` control's `Expanded` mode
@@ -658,8 +699,10 @@ export function TasksModule({ userId }: TasksModuleProps) {
     );
 
     /**
-     * A chevron click. While filtering it folds the row for the duration of THIS filter, since the
-     * reveal would otherwise re-expand it on the next render.
+     * A chevron click. While filtering it does two things at once, because a filter both hides rows
+     * and pins the ones it shows: pressing a match's chevron REVEALS the branch it was hiding, and
+     * pressing an expanded row's chevron folds it for the duration of THIS filter (the auto-reveal
+     * would otherwise re-expand it on the next render). Both marks lapse when the filter changes.
      */
     const handleToggleExpand = useCallback(
         (id: number): void => {
@@ -673,6 +716,12 @@ export function TasksModule({ userId }: TasksModuleProps) {
                 const base = new Set(previous.key === revealKey ? previous.ids : EMPTY_ID_SET);
                 if (willCollapse) base.add(id);
                 else base.delete(id);
+                return { key: revealKey, ids: base };
+            });
+            setOpenedWhileFiltered((previous) => {
+                const base = new Set(previous.key === revealKey ? previous.ids : EMPTY_ID_SET);
+                if (willCollapse) base.delete(id);
+                else base.add(id);
                 return { key: revealKey, ids: base };
             });
         },
@@ -1083,6 +1132,7 @@ export function TasksModule({ userId }: TasksModuleProps) {
                 roots={filteredRoots}
                 rows={visibleRows}
                 contextIds={contextIds}
+                hiddenChildCount={hiddenChildCount}
                 renderRow={SortableRow}
                 expandedIds={renderExpandedIds}
                 onToggleExpand={handleToggleExpand}

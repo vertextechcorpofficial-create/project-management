@@ -201,6 +201,12 @@ export interface TaskTreeProps {
      * hierarchy the match lives in, not results. Empty when nothing is filtered.
      */
     contextIds?: ReadonlySet<number>;
+    /**
+     * How many subtasks each row really has, for rows whose children the active filter is holding
+     * back. A matched parent renders without children in the pruned forest, so this is what keeps
+     * its chevron — and the count it carries — on screen. Empty when nothing is filtered.
+     */
+    hiddenChildCount?: ReadonlyMap<number, number>;
     className?: string;
     /** Accessible name of the grid. */
     "aria-label"?: string;
@@ -270,6 +276,7 @@ export function TaskTree({
     onEditTags,
     onAddSubtask,
     contextIds,
+    hiddenChildCount,
     className,
     "aria-label": ariaLabel = "Task list",
 }: TaskTreeProps) {
@@ -434,7 +441,8 @@ export function TaskTree({
                     >
                         {visible.map((node) => {
                             const position = positions.get(node.id) ?? { posInSet: 1, setSize: 1 };
-                            const hasChildren = node.children.length > 0;
+                            const hiddenCount = hiddenChildCount?.get(node.id) ?? 0;
+                            const hasChildren = node.children.length > 0 || hiddenCount > 0;
                             const isExpanded = expandedIds.has(node.id);
                             const indentDepth = Math.min(node.depth, MAX_INDENT_DEPTH);
                             const expandLabel = isExpanded ? `Collapse ${node.title}` : `Expand ${node.title}`;
@@ -675,12 +683,14 @@ export function TaskTree({
                                     ? emptyRow
                                     : visible.map((node) => {
                                           const position = positions.get(node.id) ?? { posInSet: 1, setSize: 1 };
-                                          const hasChildren = node.children.length > 0;
+                                          const hiddenCount = hiddenChildCount?.get(node.id) ?? 0;
+                                          const hasChildren = node.children.length > 0 || hiddenCount > 0;
                                           const rowProps: TaskRowProps = {
                                               node,
                                               posInSet: position.posInSet,
                                               setSize: position.setSize,
                                               hasChildren,
+                                              hiddenChildCount: hiddenCount,
                                               isContext: contextIds?.has(node.id) ?? false,
                                               isExpanded: expandedIds.has(node.id),
                                               onToggleExpand,
