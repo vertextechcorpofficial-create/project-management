@@ -1,97 +1,63 @@
-﻿"use client";
+"use client";
 
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { TaskRow, type TaskRowProps } from "../TaskRow";
-import { usePrefersReducedMotion, useTreeDnd } from "./TreeDndProvider";
+import { useTreeDnd } from "./TreeDndProvider";
 
 export type SortableTaskRowProps = TaskRowProps;
 
 /**
- * A `TaskRow` made sortable.
+ * A `TaskRow` made draggable.
  *
- * This is the ONE droppable per row: `useSortable` registers it under the row id, and no second
- * `useDroppable` is created here or anywhere else — a duplicate registration collides in dnd-kit's
- * container map and clobbers the measured rect, so `over` would resolve against the wrong node.
+ * The pointer handling lives in `TreeDndProvider`, which owns the whole list: it knows the gap under
+ * the pointer and the level the sideways travel promises. A row's job here is small:
+ * - the row being dragged keeps its SLOT but fades to 40% (`opacity-40`) and its descendants leave the
+ *   list, which is exactly the reference mockup's `.task.active{opacity:.35}` — the rows below never
+ *   jump while a task is in the air;
+ * - it draws nothing else: the one drop line lives in the list, not in a row, so it can sit in the gap
+ *   between two rows instead of on top of one;
+ * - it carries the decorative grip, which is also the only place a touch drag may start (so a swipe
+ *   still scrolls the list).
  *
- * The row's own markup is untouched (the top-level `TaskRow` is rendered, not re-implemented); the
- * sortable node ref, transform and drop-indicator classes are forwarded through the optional
- * `rowRef` / `rowStyle` / `rowClassName` props added for this wrapper, and the drag handle goes into
- * the existing `dragHandle` slot.
- *
- * Affordances — one VISIBLY DISTINCT marker per resolved intent, so the drop's meaning is explicit
- * rather than implied by whitespace:
- * - `before` → a line above the row (`border-t-2 border-t-primary`);
- * - `after`  → a line below the row (`border-b-2 border-b-primary`);
- * - `nest`   → a frame around the row (`outline-2 outline-primary` + a faint fill), never a line.
- * Under reduced motion the transform transition is dropped while the markers stay.
+ * The row itself is never translated: the mockup moves a chip, not the row, and a travelling row is
+ * what made earlier versions look like they were shoving their neighbours out of the way.
  */
 export function SortableTaskRow({ node, ...rowProps }: SortableTaskRowProps) {
-    const { activeId, overId, intent, isReorderDisabled } = useTreeDnd();
-    const prefersReducedMotion = usePrefersReducedMotion();
-    const {
-        setNodeRef,
-        setActivatorNodeRef,
-        attributes,
-        listeners,
-        transform,
-        transition,
-    } = useSortable({ id: node.id, disabled: isReorderDisabled });
+    const { activeId, hiddenIds, isReorderDisabled } = useTreeDnd();
 
-    const isDragging = activeId === node.id;
-    const isDropTarget = overId === node.id && !isDragging;
-    const showInsertBefore = isDropTarget && intent === "before";
-    const showInsertAfter = isDropTarget && intent === "after";
-    const showNest = isDropTarget && intent === "nest";
-
-    const handleLabel = isReorderDisabled
-        ? `Reordering is disabled while a filter or search is active: ${node.title}`
-        : `Reorder or move ${node.title}`;
-
-    const rowStyle = {
-        transform: CSS.Transform.toString(transform),
-        transition: prefersReducedMotion ? undefined : transition,
-    };
+    const isGhost = activeId === node.id;
+    // The dragged row keeps its slot; everything under it leaves the list with it.
+    if (!isGhost && hiddenIds.has(node.id)) return null;
 
     const dragHandle = (
-        <Button
-            ref={setActivatorNodeRef}
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            disabled={isReorderDisabled}
-            aria-label={handleLabel}
-            title={handleLabel}
+        <GripVertical
+            aria-hidden="true"
             data-slot="task-tree-drag-handle"
             className={cn(
-                "shrink-0 touch-none text-muted-foreground hover:text-foreground",
-                isReorderDisabled ? "cursor-not-allowed opacity-50" : "cursor-grab active:cursor-grabbing",
+                "size-3.5 text-muted-foreground/60 transition-colors",
+                isReorderDisabled
+                    ? "opacity-30"
+                    : "group-hover/row:text-muted-foreground group-focus-within/row:text-muted-foreground",
             )}
-            {...(isReorderDisabled ? {} : attributes)}
-            {...(isReorderDisabled ? {} : listeners)}
-        >
-            <GripVertical className="size-3.5" aria-hidden="true" />
-        </Button>
+        />
     );
 
     return (
         <TaskRow
             {...rowProps}
             node={node}
-            rowRef={setNodeRef}
-            rowStyle={rowStyle}
             rowClassName={cn(
-                showInsertBefore && "border-t-2 border-t-primary",
-                showInsertAfter && "border-b-2 border-b-primary",
-                showNest && "bg-primary/5 outline outline-2 -outline-offset-2 outline-primary",
-                isDragging && "opacity-40",
+                isGhost ? "opacity-40" : undefined,
+                isReorderDisabled
+                    ? undefined
+                    : activeId === null
+                      ? "cursor-grab"
+                      : "cursor-grabbing select-none",
             )}
-            dragHandle={dragHandle}
+            dragHandle={isGhost ? undefined : dragHandle}
         />
     );
 }
