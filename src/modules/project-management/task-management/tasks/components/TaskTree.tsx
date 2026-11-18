@@ -69,13 +69,12 @@ interface TaskTreeColumn {
  * are the INITIAL layout only — the page is full-width now, so once the department's columns (custom
  * columns included) outgrow the viewport the grid scrolls inside its own container instead.
  *
- * Order: the expand gutter, then task title, tags and assignees, then start, due, priority, status;
+ * Order: task title, tags and assignees, then start, due, priority, status;
  * the custom columns follow the fixed set and the actions gutter is appended last. Tags and
  * assignees are the two at-a-glance "what is this and who has it" cells, so they sit immediately
  * after the name; the scheduling and catalog cells follow.
  */
 const BASE_COLUMNS: readonly TaskTreeColumn[] = [
-    { key: "expand", label: "Expand", srOnly: true },
     { key: "title", label: "Task" },
     { key: "tags", label: "Tags", align: "center" },
     { key: "assignees", label: "Assignees", align: "center" },

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
     createContext,
@@ -17,7 +17,14 @@ import { GripVertical } from "lucide-react";
 import { flattenVisible, type TreeNode } from "../../utils/tree";
 import { type MoveTaskInput } from "@/modules/project-management/task-management/tasks/types/pm-task.schema";
 
-import { TITLE_CHROME_PX, TITLE_MIN_TEXT_PX, type TaskRowView } from "../TaskRow";
+import {
+    GRIP_GUTTER_PX,
+    INDENT_STEP_PX,
+    TITLE_CHROME_PX,
+    TITLE_LEFT_PAD_PX,
+    TITLE_MIN_TEXT_PX,
+    type TaskRowView,
+} from "../TaskRow";
 import {
     childInsertIndex,
     computeMovePayload,
@@ -27,13 +34,15 @@ import {
     type PointerRow,
 } from "./dnd-logic";
 
-/** Pixels of sideways travel that mean one level. Mirrors `INDENT_STEP_PX` in `TaskRow`. */
-const DRAG_INDENT_WIDTH = 20;
+/** Pixels of sideways travel that mean one level. It IS the visual step, so the drop line lands
+ * exactly where the row would sit after the drop. */
+const DRAG_INDENT_WIDTH = INDENT_STEP_PX;
 
-/** Where the drop line starts inside the row indent, in pixels — the mockup's 8px inset. */
-const DROP_LINE_INSET_PX = 8;
+/** Where the drop line starts inside the row indent, in pixels: the same gutter the row's own first
+ * glyph sits in, so the line begins exactly where the projected row would begin. */
+const DROP_LINE_INSET_PX = GRIP_GUTTER_PX + TITLE_LEFT_PAD_PX;
 
-/** Travel that separates a click from a drag, in pixels â€” the interactive elements stay clickable. */
+/** Travel that separates a click from a drag, in pixels — the interactive elements stay clickable. */
 const DRAG_THRESHOLD_PX = 5;
 
 /** Stable identity for "nothing is hidden", so an idle list never re-renders a new Set. */
@@ -68,30 +77,30 @@ export function useTreeDnd(): TreeDndContextValue {
 }
 
 export interface TreeDndProviderProps {
-    /** The department's forest from `buildTree` â€” the provider derives the flat set itself. */
+    /** The department's forest from `buildTree` — the provider derives the flat set itself. */
     roots: readonly TreeNode<TaskRowView>[];
     /** Ids whose children are currently shown; the pointer model follows the visible rows. */
     expandedIds: ReadonlySet<number>;
     /**
      * Called with the moved row's id and the pinned `{ parent_id, sibling_ids }` payload when a drop
      * settles. The id is part of the contract because the move route is addressed by the moved node
-     * (`PATCH /tasks/<id>/move`) while the payload describes its destination â€” including a new
+     * (`PATCH /tasks/<id>/move`) while the payload describes its destination — including a new
      * `parent_id` when the drag re-parented.
      */
     onMove?: (activeId: number, payload: MoveTaskInput) => void;
     /**
-     * The department's COMPLETE flat row set â€” every root, across every page. Used for the payload's
+     * The department's COMPLETE flat row set — every root, across every page. Used for the payload's
      * `sibling_ids`, and defaults to the rows under `roots`.
      */
     allRows?: readonly DndRow[];
-    /** Disables dragging â€” set while a filter or search is active. */
+    /** Disables dragging — set while a filter or search is active. */
     reorderDisabled?: boolean;
     /** Overrides the chip that follows the pointer; defaults to a compact grip + title card. */
     renderOverlay?: (node: TreeNode<TaskRowView>) => ReactNode;
     children: ReactNode;
 }
 
-/** Pre-order walk over the WHOLE forest â€” collapsed rows stay in the payload's view. */
+/** Pre-order walk over the WHOLE forest — collapsed rows stay in the payload's view. */
 function collectAllRows<T extends DndRow>(roots: readonly TreeNode<T>[]): TreeNode<T>[] {
     const collected: TreeNode<T>[] = [];
     const stack: TreeNode<T>[] = [...roots];
@@ -154,8 +163,9 @@ function collectSubtreeIds(rows: readonly DndRow[], rootId: number): ReadonlySet
  *   around it close up; nothing is displaced, no ghost keeps a slot, and the neighbours a drop is
  *   clamped against are the ones the drop would actually leave behind.
  * - The pointer's vertical position picks the GAP, measured against row centres; its horizontal travel
- *   picks the LEVEL (`offsetX / 20px`), clamped by the rows either side of that gap. One drop line
- *   sits IN the gap, from `depth Ã— 20 + 8` to the right edge â€” its length is the level.
+ *   picks the LEVEL (`offsetX / INDENT_STEP_PX`), clamped by the rows either side of that gap. One
+ *   drop line sits IN the gap, from `depth × INDENT_STEP_PX + 8` to the right edge — its length is
+ *   the level.
  * - A chip follows the pointer (+12/+8) with the task's name. One sentence under the list says what
  *   the drop would do.
  * - Escape and `pointercancel` abandon without a write; the row regains focus after a drop.
@@ -193,7 +203,7 @@ export function TreeDndProvider({
     const visibleNodes = useMemo(() => flattenVisible(roots, expandedIds), [roots, expandedIds]);
 
     /**
-     * The dragged row and its descendants, removed for the duration of the drag â€” the mockup's
+     * The dragged row and its descendants, removed for the duration of the drag — the mockup's
      * `visible()` skip. The subtree is identified from the page's rows, so a collapsed child that is
      * not on screen still travels with its parent.
      */
@@ -314,10 +324,9 @@ export function TreeDndProvider({
                 left:
                     titleLeft +
                     Math.min(
-                        projection.depth * DRAG_INDENT_WIDTH,
+                        projection.depth * DRAG_INDENT_WIDTH + DROP_LINE_INSET_PX,
                         Math.max(0, titleWidth - (TITLE_CHROME_PX + TITLE_MIN_TEXT_PX)),
-                    ) +
-                    DROP_LINE_INSET_PX,
+                    ),
             });
             setHintParentId(projection.parentId);
             setChip({ x: clientX + 12, y: clientY + 8 });

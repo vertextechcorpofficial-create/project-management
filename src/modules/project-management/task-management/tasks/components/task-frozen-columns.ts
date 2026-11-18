@@ -18,7 +18,7 @@
  */
 
 /** The frozen columns, in table order; the first pins at `left: 0`. */
-export const FROZEN_TASK_COLUMN_KEYS = ["expand", "title"] as const;
+export const FROZEN_TASK_COLUMN_KEYS = ["title"] as const;
 
 export type FrozenTaskColumnKey = (typeof FROZEN_TASK_COLUMN_KEYS)[number];
 
@@ -39,7 +39,7 @@ export function isFrozenTaskColumnKey(columnKey: string): columnKey is FrozenTas
 export function frozenTaskColumnOffsets(
     widthFor: (columnKey: string) => number,
 ): FrozenTaskColumnOffsets {
-    const offsets: Record<FrozenTaskColumnKey, number> = { expand: 0, title: 0 };
+    const offsets = {} as Record<FrozenTaskColumnKey, number>;
     let left = 0;
     for (const key of FROZEN_TASK_COLUMN_KEYS) {
         offsets[key] = left;

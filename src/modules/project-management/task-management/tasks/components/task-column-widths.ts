@@ -19,7 +19,6 @@
 
 /** The fixed table columns, plus the `field` family default every custom column starts from. */
 export type TaskColumnKey =
-    | "expand"
     | "title"
     | "assignees"
     | "start"
@@ -39,13 +38,8 @@ export type TaskColumnKey =
  * `tags` is the exception: a tag cell is a stack of 24px circles that overlap, capped at three plus
  * a `+N` pill, so 104px already fits the widest cell and 180 left a band of dead space beside the
  * icons. The same reasoning shrinks its floor.
- *
- * `expand` now holds only the drag handle — the chevron moved into the title cell so it travels
- * with the name it expands — so its default is the handle plus cell padding, not the old two-control
- * gutter.
  */
 export const DEFAULT_TASK_COLUMN_WIDTHS: Record<TaskColumnKey, number> = {
-    expand: 44,
     title: 220,
     assignees: 160,
     start: 160,
@@ -59,13 +53,12 @@ export const DEFAULT_TASK_COLUMN_WIDTHS: Record<TaskColumnKey, number> = {
 
 /**
  * The floor per column: nothing can be dragged narrower than this. The narrow utility gutters
- * (expand, actions) get a smaller floor than the text columns, because they hold one control each;
+ * (actions) gets a smaller floor than the text columns, because it holds one control;
  * the text columns still keep enough room that their truncation is legible rather than a single
  * glyph. Custom columns share the `field` floor. (A fixed column's floor is moot — see
  * `NON_RESIZABLE_TASK_COLUMN_KEYS` — but it stays here so the record remains total over the union.)
  */
 export const MIN_TASK_COLUMN_WIDTHS: Record<TaskColumnKey, number> = {
-    expand: 40,
     title: 200,
     assignees: 120,
     start: 120,
@@ -78,20 +71,16 @@ export const MIN_TASK_COLUMN_WIDTHS: Record<TaskColumnKey, number> = {
 };
 
 /**
- * The structural gutters whose width is NOT a user preference: the `expand` control gutter (the
- * accordion chevron, now that drag-and-drop is gone) and the `actions` icon gutter. Their widths are
- * pinned by the table's own geometry — `expand` is the leading frozen column, so its width is the
- * baseline every following
- * column's frozen offset is derived from — and nothing in the row reads a "wider gutter" as a
- * preference. Letting them be dragged would silently shift the frozen block and the indentation
- * baseline for no benefit, so they are fixed.
+ * The structural gutter whose width is NOT a user preference: the `actions` icon gutter. Its width is
+ * pinned by the table's own geometry, and nothing in the row reads a "wider gutter" as a preference.
+ * Letting it be dragged would shift the row's trailing controls for no benefit, so it is fixed.
  *
  * This constant is the SINGLE SOURCE OF TRUTH for "which columns may be resized": the header reads
  * `isResizableTaskColumnKey` to decide whether to render a handle, and the width store reads
  * `isNonResizableTaskColumnKey` to ignore any persisted or proposed override for these keys. Every
  * other column — the data columns and every custom `field-*` column — stays resizable.
  */
-export const NON_RESIZABLE_TASK_COLUMN_KEYS = ["expand", "actions"] as const;
+export const NON_RESIZABLE_TASK_COLUMN_KEYS = ["actions"] as const;
 export type NonResizableTaskColumnKey = (typeof NON_RESIZABLE_TASK_COLUMN_KEYS)[number];
 
 /** True for a structural gutter whose width must never change by any path. */
@@ -177,7 +166,7 @@ export function parseTaskColumnWidths(raw: string | null): TaskColumnWidthOverri
     const overrides: Record<string, number> = {};
     for (const [columnKey, value] of Object.entries(parsed)) {
         if (!isPersistableColumnKey(columnKey)) continue;
-        // A structural gutter's width is not a preference, so a `expand`/`actions` override persisted
+        // A structural gutter's width is not a preference, so an `actions` override persisted
         // by the build that still allowed it is DROPPED here — silently inert, without a key bump and
         // without discarding the user's other widths. The stale on-disk entry is purged the next time
         // any column is resized (the write spreads this parsed snapshot, which no longer carries it).

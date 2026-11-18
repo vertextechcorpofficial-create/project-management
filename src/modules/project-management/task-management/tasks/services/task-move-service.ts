@@ -5,7 +5,7 @@ import { loadTaskScoped, type ScopedTaskRow } from "./scoping";
 import { isDescendant, type TreeSourceRow } from "../utils/tree";
 import { phNow } from "../utils/ph-time";
 import type { MoveTaskInput } from "../types/pm-task.schema";
-import { containsExactlyOnce, isCompletePostMoveChildSet } from "./task-move-rules";
+import { containsExactlyOnce, isCompletePostMoveChildSet, scopeToMoveList } from "./task-move-rules";
 import { isListCompatible } from "./task-list-policy";
 import { TaskItemService } from "./task-item-service";
 import { TaskService, TaskServiceError } from "./task-service";
@@ -83,7 +83,8 @@ export class TaskMoveService {
             parentListId: parent?.listId ?? null,
             siblingIds: input.sibling_ids,
         };
-        TaskMoveService.assertMoveTarget(rows, target);
+        // Only the moved task's own list can be renumbered, so only its children define "complete".
+        TaskMoveService.assertMoveTarget(scopeToMoveList(rows, target.movedListId), target);
         await TaskMoveService.writeSiblingOrder(actor, target);
 
         // The two structural facts a move can change, logged after the write. `buildTaskActivityDeltas`
@@ -116,7 +117,7 @@ export class TaskMoveService {
     /**
      * Every 400 of the move contract, in order: the target parent is in the same list as the moved
      * task; it is neither the moved node itself nor one of its descendants; the sibling list names
-     * the moved node exactly once; every entry is a live task of the actor's department; and the
+     * the moved node exactly once; every entry is a live task of the moved task's list; and the
      * list is exactly the target parent's complete post-move child set. The target parent itself was
      * validated by `resolveParent` already.
      */
