@@ -1,4 +1,5 @@
 "use client";
+import { randomUUID } from "../shared/random-uuid";
 
 import { useRef, useState } from "react";
 import type { Detail, WorkFile } from "./types";
@@ -24,7 +25,7 @@ export function useSubmission({ detail, api, onBusyChange, onError, onSubmitted 
    onBusyChange(true); onError("");
    try {
     const signature = JSON.stringify([detail.id, detail.row_version, remark, files.map(file => [file.name, file.size, file.lastModified])]);
-    if (!pending.current || pending.current.signature !== signature) pending.current = { signature, key: crypto.randomUUID(), ids: [] };
+    if (!pending.current || pending.current.signature !== signature) pending.current = { signature, key: randomUUID(), ids: [] };
     const ids = pending.current.ids;
     while (ids.length < files.length) {
      const file = files[ids.length]; const data = new FormData(); data.append("file", file);

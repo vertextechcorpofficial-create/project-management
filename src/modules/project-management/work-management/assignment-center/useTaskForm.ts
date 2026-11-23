@@ -1,4 +1,5 @@
 "use client";
+import { randomUUID } from "../shared/random-uuid";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Assignment, Bootstrap, Frequency, Task, WorkFile } from "./types";
@@ -55,7 +56,7 @@ export function useTaskForm({ task, bootstrap, api, onSaved }: {
     ...(task ? { expected_revision: task.revision_number, reason } : {}),
    };
    const body = JSON.stringify(payload);
-   if (!request.current || request.current.body !== body) request.current = { key: crypto.randomUUID(), body };
+   if (!request.current || request.current.body !== body) request.current = { key: randomUUID(), body };
    await api(task ? `tasks/${task.id}` : "tasks", { method: task ? "PATCH" : "POST", headers: { "Idempotency-Key": request.current.key }, body });
    request.current = null;
    onSaved();
