@@ -1,4 +1,5 @@
 "use client";
+import { randomUUID } from "../shared/random-uuid";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addDays as shiftDay, endOfMonth, format, startOfMonth, startOfWeek } from "date-fns";
@@ -187,7 +188,7 @@ function DetailPanel({ id, api, workspace, employees, onClose, onChanged, onEdit
  }, [action, api, id]);
  useEffect(() => { const t = setInterval(async () => { try { const d = await api<Detail>(`occurrences/${id}`); if (detail && (d.row_version !== detail.row_version || d.task.revision_number !== detail.task.revision_number)) setChanged(true); } catch { /* User-triggered refresh surfaces errors without clearing drafts. */ } }, 15000); return () => clearInterval(t); }, [api, id, detail]);
  const mutate = async (path: string, body: unknown, method = "POST") => {
-  setBusy(true); setError(""); try { await api(path, { method, headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(body) }); await reload(); onChanged(); return true; } catch (e) { setError(e instanceof Error ? e.message : "Command failed."); return false; } finally { setBusy(false); }
+  setBusy(true); setError(""); try { await api(path, { method, headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify(body) }); await reload(); onChanged(); return true; } catch (e) { setError(e instanceof Error ? e.message : "Command failed."); return false; } finally { setBusy(false); }
  };
  const submission = useSubmission({ detail, api, onBusyChange: setBusy, onError: setError, onSubmitted: async () => { await reload(); onChanged(); setTab("Versions"); } });
  const name = (id: string) => employees.find(e => e.id === id)?.name ?? `Employee ${id}`;
