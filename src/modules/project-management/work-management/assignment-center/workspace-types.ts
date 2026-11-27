@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { Bootstrap, Employee, OccurrenceView, Summary, Workspace } from "./types";
+import type { Bootstrap, Employee, OccurrenceView, Summary, Task, Workspace } from "./types";
 
 export type WorkApi = <T>(path: string, init?: RequestInit) => Promise<T>;
 export interface HeaderAccount { name: string; email: string; avatar: string }
@@ -10,7 +10,8 @@ export interface DashboardProps {
  data: DashboardData; selectedEmployee: string;
  periodLabel: string; onSelectEmployee: (id: string) => void; onClearEmployee: () => void;
 }
-export interface OverviewProps { bootstrap: Bootstrap | null; rows: OccurrenceView[]; onCreate: () => void; onOpen: (id: string) => void }
+export interface TaskSummary { id: string; title: string; scope_type: "DEPARTMENT" | "GLOBAL"; priority: Task["priority"]; lifecycle_status: Task["lifecycle_status"]; created_at: string; department_id: string | null; assignee_names: string[]; assignee_count: number; submitted_count: number; occurrence_count: number; open_occurrence_id: string | null }
+export interface OverviewProps { bootstrap: Bootstrap | null; rows: OccurrenceView[]; tasks?: TaskSummary[]; onCreate: () => void; onOpen: (id: string) => void }
 export interface WorkspaceDefinition {
  workspace: Workspace;
  title: string;

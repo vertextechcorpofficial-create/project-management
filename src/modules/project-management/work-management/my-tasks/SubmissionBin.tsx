@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { Detail } from "./types";
 import type { SubmissionController } from "./useSubmission";
+import { SubmissionFilePreview } from "../SubmissionFilePreview";
 
 export function SubmissionBin({ detail, controller, busy, changed }: {
  detail: Detail;
@@ -28,7 +29,7 @@ export function SubmissionBin({ detail, controller, busy, changed }: {
    <p className="text-xs text-muted-foreground">At least one attachment · any file type · max 5 MB each · up to 10 files. Submitting completes only your obligation.</p>
    <label className="block cursor-pointer rounded-lg border bg-background p-4 text-center text-sm">Select files; you can add more in another selection<input aria-label="Deliverable attachments" type="file" multiple disabled={busy || files.length >= 10} className="sr-only" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /></label>
    {selectionMessage && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{selectionMessage}</p>}
-  {files.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between text-xs"><span>{file.name} ({Math.round(file.size / 1024)} KiB)</span><Button size="sm" variant="ghost" disabled={busy} onClick={() => setFiles(current => current.filter((_, position) => position !== index))}>Remove</Button></div>)}
+   {files.map((file, index) => <div key={`${file.name}-${index}`} className="space-y-2 rounded-lg border bg-background p-3"><div className="flex items-center justify-between text-xs"><span>{file.name} ({Math.round(file.size / 1024)} KiB)</span><Button size="sm" variant="ghost" disabled={busy} onClick={() => setFiles(current => current.filter((_, position) => position !== index))}>Remove</Button></div><div className="rounded border bg-muted/30 p-2"><SubmissionFilePreview file={file} /></div></div>)}
   <label className="block text-sm">Remark (optional)<Textarea value={remark} onChange={event => setRemark(event.target.value)} /></label>
    <Button disabled={busy || changed || !files.length || files.length > 10 || files.some(file => file.size <= 0 || file.size > 5 * 1024 * 1024)} onClick={submit}>{busy ? <Loader2 className="mr-2 size-4 animate-spin" /> : <CheckCircle2 className="mr-2 size-4" />}{detail.first_submission_id ? "Submit New Version" : "Submit Deliverable"}</Button>
   <p className="text-xs text-muted-foreground">No approval gate. Late submissions remain accepted. Reviewer comments never reverse completion.</p>

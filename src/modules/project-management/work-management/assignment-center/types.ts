@@ -51,6 +51,7 @@ export interface Bootstrap {
 }
 export interface OccurrenceView extends Occurrence { task: Task; assignee: Employee; submissions: Submission[] }
 export interface Detail extends OccurrenceView {
- events: AuditEvent[]; comments: Comment[]; files: Omit<WorkFile, "bytes">[];
+  assignees: Employee[];
+  events: AuditEvent[]; comments: Comment[]; files: Omit<WorkFile, "bytes">[];
  unacknowledged: AuditEvent[]; can_edit: boolean; can_submit: boolean; can_comment: boolean;
 }

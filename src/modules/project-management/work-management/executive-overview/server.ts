@@ -45,7 +45,7 @@ export async function liveBootstrap(): Promise<Bootstrap> {
   const [users, grants, modules] = await Promise.all([
    readRows<{ user_id: number; user_fname: string; user_lname: string; user_department: number | null; is_deleted: unknown; role: unknown; isAdmin: unknown }>("user", ["user_id", "user_fname", "user_lname", "user_department", "is_deleted", "role", "isAdmin"], { user_id: { _eq: userId } }, 1),
    readRows<{ role: Role; department_id: number | null }>("pm_work_role_grant", ["role", "department_id"], { user_id: { _eq: userId }, revoked_at: { _null: true } }),
-   readRows<{ id: number | string; base_path: string }>("modules", ["id", "base_path"], { status: { _eq: "active" }, base_path: { _in: ["/project-management/work-management/assignor", "/project-management/work-management/assignment-center", "/project-management/work-management/assignee", "/project-management/work-management/my-tasks", "/project-management/work-management/executive", "/project-management/work-management/executive-overview", "/project-management/work-management/departmental-overview"] } }),
+    readRows<{ id: number | string; base_path: string }>("modules", ["id", "base_path"], { status: { _eq: "active" }, base_path: { _in: ["/project-management/work-management/assignor", "/project-management/work-management/assignment-center", "/project-management/work-management/global-assignment-center", "/project-management/work-management/assignee", "/project-management/work-management/my-tasks", "/project-management/work-management/executive", "/project-management/work-management/executive-overview", "/project-management/work-management/departmental-overview"] } }),
   ]);
   requireRule(users.length && isActiveEmployeeFlag(users[0].is_deleted), 401, "INACTIVE_EMPLOYEE", "Your employee record is unavailable.");
  const user = users[0];
@@ -56,8 +56,12 @@ export async function liveBootstrap(): Promise<Bootstrap> {
    modules.length ? readRows<{ module_id: number | string }>("user_access_modules", ["module_id"], { user_id: { _eq: userId }, module_id: { _in: modules.map(m => m.id) } }) : Promise.resolve([]),
    user.user_department === null ? Promise.resolve([]) : readRows<{ department_name: string }>("department", ["department_name"], { department_id: { _eq: user.user_department } }, 1),
   ]);
- const grantedIds = new Set(moduleGrants.map(grant => String(grant.module_id)));
- const readAccess = resolveWorkspaceReadAccess({ platformRole: user.role, isAdmin: user.isAdmin, roles, grantedModulePaths: modules.filter(m => grantedIds.has(String(m.id))).map(m => m.base_path) });
+  const grantedIds = new Set(moduleGrants.map(grant => String(grant.module_id)));
+  const grantedModulePaths = modules.filter(m => grantedIds.has(String(m.id))).map(m => m.base_path);
+  const platformAdministrator = user.role === "ADMIN" || user.isAdmin === true || user.isAdmin === 1 || user.isAdmin === "1";
+  const globalAssignmentAccess = grantedModulePaths.some(path => path.replace(/\/+$/, "") === "/project-management/work-management/global-assignment-center");
+  if ((platformAdministrator || globalAssignmentAccess) && !roles.includes("GLOBAL_ASSIGNOR")) roles.push("GLOBAL_ASSIGNOR");
+  const readAccess = resolveWorkspaceReadAccess({ platformRole: user.role, isAdmin: user.isAdmin, roles, grantedModulePaths });
   // Assignment Center access is the explicit authorization to assign within the actor's
   // home department. It never implies global scope; only a GLOBAL_ASSIGNOR grant does that.
   if (readAccess.workspaces.includes("assignor") && !roles.includes("GLOBAL_ASSIGNOR") && !roles.includes("DEPARTMENT_ASSIGNOR")) roles.push("DEPARTMENT_ASSIGNOR");

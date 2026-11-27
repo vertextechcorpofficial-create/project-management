@@ -87,7 +87,18 @@ export class LiveReader {
   const detail = engine.detail(occurrenceId);
   // Persisted create/read testing is enabled; edit/submit/comment commands and
   // acknowledgment writes are intentionally not implied by enabling Create Task.
-   return { ...detail, can_edit: false, can_submit: detail.can_submit && workspace === "my-tasks", can_comment: false, unacknowledged: [] };
+    const taskAssignments = await this.all("pm_work_assignment", ["assignee_user_id", "status"], { task_id: { _eq: occurrence.task_id }, status: { _eq: "ACTIVE" } });
+    const taskUsers = await this.byIds("user", ["user_id", "user_fname", "user_lname", "user_department", "is_deleted"], "user_id", taskAssignments.map(row => id(row.assignee_user_id)));
+    const taskDepartments = await this.byIds("department", ["department_id", "department_name"], "department_id", taskUsers.filter(user => user.user_department !== null).map(user => id(user.user_department)));
+    const assignees = taskAssignments.map(row => {
+     const userId = id(row.assignee_user_id);
+     const existing = engine.state.employees.find(user => user.id === userId);
+     if (existing) return existing;
+     const user = taskUsers.find(candidate => id(candidate.user_id) === userId);
+     if (!user || !isActiveEmployeeFlag(user.is_deleted)) return null;
+     return { id: userId, name: [user.user_fname, user.user_lname].filter(Boolean).join(" "), department_id: user.user_department === null ? "" : id(user.user_department), department: String(taskDepartments.find(department => String(department.department_id) === String(user.user_department))?.department_name ?? "No department"), roles: [] } satisfies Employee;
+    }).filter((user): user is Employee => Boolean(user));
+    return { ...detail, assignee: { ...detail.assignee, name: assignees.map(user => user.name).join(", ") }, assignees, can_edit: false, can_submit: detail.can_submit && workspace === "my-tasks", can_comment: false, unacknowledged: [] };
  }
   async load(actor: Employee, workspace: Workspace, period: ReadPeriod): Promise<WorkEngine> {
   requireRule(workspaceAllowed(actor, workspace), 403, "FORBIDDEN", "You do not have access to this workspace.");

@@ -87,8 +87,19 @@ export class LiveReader {
   const decode = (value: unknown) => typeof value === "string" ? JSON.parse(value) : value ?? null;
   engine.state.events = events.map(event => ({ id: id(event.id), event_type: String(event.event_type), task_id: id(event.task_id), occurrence_id: event.occurrence_id ? id(event.occurrence_id) : null, actor_id: event.actor_id ? id(event.actor_id) : String(event.system_actor ?? "System"), reason: String(event.reason ?? ""), old_values: decode(event.old_values), new_values: decode(event.new_values), created_at: utc(event.created_at), request_id: String(event.request_id), material: /^(TASK_(DETAILS_UPDATED|SCHEDULE_CHANGED|PAUSED|RESUMED|CANCELLED|ARCHIVED|DEADLINE_CHANGED)|OCCURRENCE_(REVIEWED|MARKED_DONE|DEADLINE_CHANGED|CANCELLED))$/.test(String(event.event_type)) })).sort((a, b) => a.created_at.localeCompare(b.created_at));
   engine.state.comments = comments.map(comment => ({ id: id(comment.id), occurrence_id: id(comment.occurrence_id), submission_id: comment.submission_id ? id(comment.submission_id) : null, author_id: id(comment.author_id), text: String(comment.comment_text), created_at: utc(comment.created_at) }));
-  const detail = engine.detail(occurrenceId);
-    return { ...detail, can_submit: detail.can_submit && workspace === "my-tasks", can_comment: detail.can_comment || detail.can_edit };
+   const taskAssignments = await this.all("pm_work_assignment", ["assignee_user_id", "status"], { task_id: { _eq: occurrence.task_id }, status: { _eq: "ACTIVE" } });
+   const taskUsers = await this.byIds("user", ["user_id", "user_fname", "user_lname", "user_department", "is_deleted"], "user_id", taskAssignments.map(row => id(row.assignee_user_id)));
+   const taskDepartments = await this.byIds("department", ["department_id", "department_name"], "department_id", taskUsers.filter(user => user.user_department !== null).map(user => id(user.user_department)));
+   const assignees = taskAssignments.map(row => {
+    const userId = id(row.assignee_user_id);
+    const existing = engine.state.employees.find(user => user.id === userId);
+    if (existing) return existing;
+    const user = taskUsers.find(candidate => id(candidate.user_id) === userId);
+    if (!user || !isActiveEmployeeFlag(user.is_deleted)) return null;
+    return { id: userId, name: [user.user_fname, user.user_lname].filter(Boolean).join(" "), department_id: user.user_department === null ? "" : id(user.user_department), department: String(taskDepartments.find(department => String(department.department_id) === String(user.user_department))?.department_name ?? "No department"), roles: [] } satisfies Employee;
+   }).filter((user): user is Employee => Boolean(user));
+   const detail = engine.detail(occurrenceId);
+     return { ...detail, assignee: { ...detail.assignee, name: assignees.map(user => user.name).join(", ") }, assignees, can_submit: detail.can_submit && workspace === "my-tasks", can_comment: detail.can_comment || detail.can_edit };
  }
  async load(actor: Employee, workspace: Workspace, period: ReadPeriod): Promise<WorkEngine> {
   requireRule(workspaceAllowed(actor, workspace), 403, "FORBIDDEN", "You do not have access to this workspace.");

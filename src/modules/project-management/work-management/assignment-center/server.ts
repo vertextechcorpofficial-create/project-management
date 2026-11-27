@@ -46,7 +46,7 @@ export async function liveBootstrap(): Promise<Bootstrap> {
   const [users, grants, modules] = await Promise.all([
    readRows<{ user_id: number; user_fname: string; user_lname: string; user_department: number | null; is_deleted: unknown; role: unknown; isAdmin: unknown }>("user", ["user_id", "user_fname", "user_lname", "user_department", "is_deleted", "role", "isAdmin"], { user_id: { _eq: userId } }, 1),
    readRows<{ role: Role; department_id: number | null }>("pm_work_role_grant", ["role", "department_id"], { user_id: { _eq: userId }, revoked_at: { _null: true } }),
-   readRows<{ id: number | string; base_path: string }>("modules", ["id", "base_path"], { status: { _eq: "active" }, base_path: { _in: ["/project-management/work-management/assignor", "/project-management/work-management/assignment-center", "/project-management/work-management/assignee", "/project-management/work-management/my-tasks", "/project-management/work-management/executive", "/project-management/work-management/executive-overview", "/project-management/work-management/departmental-overview"] } }),
+    readRows<{ id: number | string; base_path: string }>("modules", ["id", "base_path"], { status: { _eq: "active" }, base_path: { _in: ["/project-management/work-management/assignor", "/project-management/work-management/assignment-center", "/project-management/work-management/global-assignment-center", "/project-management/work-management/assignee", "/project-management/work-management/my-tasks", "/project-management/work-management/executive", "/project-management/work-management/executive-overview", "/project-management/work-management/departmental-overview"] } }),
   ]);
   requireRule(users.length && isActiveEmployeeFlag(users[0].is_deleted), 401, "INACTIVE_EMPLOYEE", "Your employee record is unavailable.");
  const user = users[0];
@@ -57,8 +57,12 @@ export async function liveBootstrap(): Promise<Bootstrap> {
    modules.length ? readRows<{ module_id: number | string }>("user_access_modules", ["module_id"], { user_id: { _eq: userId }, module_id: { _in: modules.map(m => m.id) } }) : Promise.resolve([]),
    user.user_department === null ? Promise.resolve([]) : readRows<{ department_name: string }>("department", ["department_name"], { department_id: { _eq: user.user_department } }, 1),
   ]);
- const grantedIds = new Set(moduleGrants.map(grant => String(grant.module_id)));
- const readAccess = resolveWorkspaceReadAccess({ platformRole: user.role, isAdmin: user.isAdmin, roles, grantedModulePaths: modules.filter(m => grantedIds.has(String(m.id))).map(m => m.base_path) });
+  const grantedIds = new Set(moduleGrants.map(grant => String(grant.module_id)));
+  const grantedModulePaths = modules.filter(m => grantedIds.has(String(m.id))).map(m => m.base_path);
+  const platformAdministrator = user.role === "ADMIN" || user.isAdmin === true || user.isAdmin === 1 || user.isAdmin === "1";
+  const globalAssignmentAccess = grantedModulePaths.some(path => path.replace(/\/+$/, "") === "/project-management/work-management/global-assignment-center");
+  if ((platformAdministrator || globalAssignmentAccess) && !roles.includes("GLOBAL_ASSIGNOR")) roles.push("GLOBAL_ASSIGNOR");
+  const readAccess = resolveWorkspaceReadAccess({ platformRole: user.role, isAdmin: user.isAdmin, roles, grantedModulePaths });
   // Assignment Center access is the explicit authorization to assign within the actor's
   // home department. It never implies global scope; only a GLOBAL_ASSIGNOR grant does that.
   if (readAccess.workspaces.includes("assignor") && !roles.includes("GLOBAL_ASSIGNOR") && !roles.includes("DEPARTMENT_ASSIGNOR")) roles.push("DEPARTMENT_ASSIGNOR");
@@ -358,11 +362,32 @@ export async function liveRead(path: string[], workspace: Workspace, period: Rea
   requireRule(path.length === 2, 404, "NOT_FOUND", "Endpoint not found.");
   return detail;
  }
- if (route === "directory") {
-  const reader = new LiveReader((collection, fields, filter, limit, page) => readRows<Record<string, unknown>>(collection, fields, filter, limit, page));
-  return reader.directory(actor, workspace);
- }
- if (path[0] === "tasks" && /^\d+$/.test(path[1] ?? "") && path[2] === "assignments") {
+  if (route === "directory") {
+   const reader = new LiveReader((collection, fields, filter, limit, page) => readRows<Record<string, unknown>>(collection, fields, filter, limit, page));
+   return reader.directory(actor, workspace);
+  }
+  if (route === "tasks") {
+   requireRule(workspace === "assignor", 403, "ASSIGNOR_WORKSPACE_REQUIRED", "Task definitions are available from Assignment Center.");
+   const assignmentFilter = actor.roles.includes("GLOBAL_ASSIGNOR") || actor.read_all_departments === true ? {} : { department_id_at_assignment: { _eq: actor.department_id } };
+   const assignments = await readRows<Record<string, unknown>>("pm_work_assignment", ["id", "task_id", "assignee_user_id", "status"], assignmentFilter, 5000);
+   const taskIds = [...new Set(assignments.map(row => String(row.task_id)))];
+   if (!taskIds.length) return { items: [], total: 0 };
+   const [tasks, occurrences, users] = await Promise.all([
+    readRows<Record<string, unknown>>("pm_work_task", ["id", "title", "scope_type", "priority", "lifecycle_status", "created_at", "department_id"], { id: { _in: taskIds } }, 5000),
+    readRows<Record<string, unknown>>("pm_work_occurrence", ["id", "task_id", "first_submission_id", "status"], { task_id: { _in: taskIds } }, 5000),
+    readRows<Record<string, unknown>>("user", ["user_id", "user_fname", "user_lname", "is_deleted"], { user_id: { _in: [...new Set(assignments.map(row => String(row.assignee_user_id)))] } }, 5000),
+   ]);
+   const items = tasks.map(task => {
+    const taskId = String(task.id);
+    const taskAssignments = assignments.filter(row => String(row.task_id) === taskId && row.status === "ACTIVE");
+    const taskOccurrences = occurrences.filter(row => String(row.task_id) === taskId && row.status !== "CANCELLED");
+    const assigneeNames = taskAssignments.map(row => users.find(user => String(user.user_id) === String(row.assignee_user_id))).filter(user => user && isActiveEmployeeFlag(user.is_deleted)).map(user => [user?.user_fname, user?.user_lname].filter(Boolean).join(" "));
+    const open = taskOccurrences.find(row => !row.first_submission_id);
+    return { id: taskId, title: String(task.title), scope_type: task.scope_type, priority: task.priority, lifecycle_status: task.lifecycle_status, created_at: String(task.created_at), department_id: task.department_id == null ? null : String(task.department_id), assignee_names: assigneeNames, assignee_count: taskAssignments.length, submitted_count: taskOccurrences.filter(row => !!row.first_submission_id).length, occurrence_count: taskOccurrences.length, open_occurrence_id: open ? String(open.id) : taskOccurrences[0] ? String(taskOccurrences[0].id) : null };
+   }).sort((a, b) => b.created_at.localeCompare(a.created_at));
+   return { items, total: items.length };
+  }
+  if (path[0] === "tasks" && /^\d+$/.test(path[1] ?? "") && path[2] === "assignments") {
   const taskRow = (await readRows<Record<string, unknown>>("pm_work_task", ["id", "scope_type", "department_id"], { id: { _eq: path[1] } }, 1))[0];
   requireRule(taskRow, 404, "NOT_FOUND", "Task not found.");
   requireRule(canEdit(actor, { scope_type: taskRow.scope_type, department_id: taskRow.department_id === null ? null : String(taskRow.department_id) } as Task), 403, "FORBIDDEN", "You cannot edit this task.");

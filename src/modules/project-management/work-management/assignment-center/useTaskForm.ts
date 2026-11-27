@@ -1,5 +1,4 @@
 "use client";
-import { randomUUID } from "../shared/random-uuid";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Assignment, Bootstrap, Frequency, Task, WorkFile } from "./types";
@@ -7,6 +6,8 @@ import { localDate } from "./recurrence";
 import type { WorkApi } from "./workspace-types";
 import { assignmentAvailability } from "./availability";
 import { validateTaskTiming } from "./task-timing";
+import { workMutationError, workMutationSuccess } from "../toast-feedback";
+import { randomUUID } from "../shared/random-uuid";
 
 export function useTaskForm({ task, bootstrap, api, onSaved }: {
  task: Task | null; bootstrap: Bootstrap; api: WorkApi; onSaved: () => void;
@@ -57,10 +58,11 @@ export function useTaskForm({ task, bootstrap, api, onSaved }: {
    };
    const body = JSON.stringify(payload);
    if (!request.current || request.current.body !== body) request.current = { key: randomUUID(), body };
-   await api(task ? `tasks/${task.id}` : "tasks", { method: task ? "PATCH" : "POST", headers: { "Idempotency-Key": request.current.key }, body });
-   request.current = null;
-   onSaved();
-  } catch (error) { setError(error instanceof Error ? error.message : "Unable to save task."); }
+    await api(task ? `tasks/${task.id}` : "tasks", { method: task ? "PATCH" : "POST", headers: { "Idempotency-Key": request.current.key }, body });
+    request.current = null;
+    workMutationSuccess(task ? `tasks/${task.id}` : "tasks", task ? "PATCH" : "POST");
+    onSaved();
+   } catch (error) { setError(error instanceof Error ? error.message : "Unable to save task."); workMutationError(error, "Unable to save task."); }
   finally { setBusy(false); }
  };
  return { title, setTitle, description, setDescription, scope, setScope, dept, setDept, assignees, originalAssignees, setAssignees, personSearch, setPersonSearch, report, setReport, priority, setPriority, frequency, setFrequency, start, setStart, end, setEnd, time, setTime, interval, setIntervalValue, unit, setUnit, weekdays, setWeekdays, monthday, setMonthday, monthEnd, setMonthEnd, availability, setAvailability, setReferences, reason, setReason, error, busy, ready, people, save };
