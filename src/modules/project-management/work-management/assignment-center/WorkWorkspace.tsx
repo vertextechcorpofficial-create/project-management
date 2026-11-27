@@ -15,11 +15,12 @@ import { NavUser } from "@/components/shared/app-sidebar/nav-user";
 import { cn } from "@/lib/utils";
 import type { Bootstrap, Detail, Employee, OccurrenceView, Summary, Task, Workspace } from "./types";
 import { localDate } from "./recurrence";
-import type { HeaderAccount, WorkspaceDefinition, DashboardData } from "./workspace-types";
+import type { HeaderAccount, WorkspaceDefinition, DashboardData, TaskSummary } from "./workspace-types";
 import { SubmissionBin } from "./SubmissionBin";
 import { useSubmission } from "./useSubmission";
 import { TaskForm } from "./TaskForm";
 import { frequencyLabels, selectClass } from "./presentation";
+import { workMutationError, workMutationSuccess } from "../toast-feedback";
 
 const BASE = "/api/project-management/work-management/assignor";
 const dateTime = (date: string) => new Intl.DateTimeFormat("en-PH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Manila" }).format(new Date(date));
@@ -55,7 +56,8 @@ export function WorkWorkspace({ definition, account }: { definition: WorkspaceDe
  const [employee, setEmployee] = useState(""); const [status, setStatus] = useState("");
  const [priority, setPriority] = useState(""); const [recurrence, setRecurrence] = useState("");
  const [department, setDepartment] = useState(""); const [more, setMore] = useState(false);
- const [items, setItems] = useState<OccurrenceView[]>([]); const [summary, setSummary] = useState<Summary | null>(null);
+  const [items, setItems] = useState<OccurrenceView[]>([]); const [summary, setSummary] = useState<Summary | null>(null);
+  const [taskItems, setTaskItems] = useState<TaskSummary[]>([]);
  const [total, setTotal] = useState(0); const [page, setPage] = useState(1);
   const [dashboardData, setDashboardData] = useState<DashboardData>({ employees: [], trends: [] });
   const bootstrapCache = useRef<Bootstrap | null>(null);
@@ -87,8 +89,9 @@ export function WorkWorkspace({ definition, account }: { definition: WorkspaceDe
      const calendarRequest = needsCalendar ? api<{ items: OccurrenceView[]; total: number; summary: Summary }>(`occurrences/calendar?${q}`) : Promise.resolve(null);
      const displayRequest = needsCalendar && alternateRoute ? api<{ items: OccurrenceView[]; total: number }>(`${alternateRoute}?${q}`) : Promise.resolve(null);
      const reuseExecutiveMetrics = workspace === "executive" && !!employee;
-     const dashboardRequest = definition.loadDashboard && !reuseExecutiveMetrics ? definition.loadDashboard(api, q) : Promise.resolve(null);
-     const [boot, data, alternate, dashboard, directory] = await Promise.all([bootRequest, calendarRequest, displayRequest, dashboardRequest, directoryRequest]);
+      const dashboardRequest = definition.loadDashboard && !reuseExecutiveMetrics ? definition.loadDashboard(api, q) : Promise.resolve(null);
+      const taskRequest = view === "All Tasks" && workspace === "assignor" ? api<{ items: TaskSummary[] }>("tasks") : Promise.resolve(null);
+      const [boot, data, alternate, dashboard, directory, taskData] = await Promise.all([bootRequest, calendarRequest, displayRequest, dashboardRequest, directoryRequest, taskRequest]);
      if (!active) return;
      setLoadedKey(queryKey);
      bootstrapCache.current = boot;
@@ -100,8 +103,9 @@ export function WorkWorkspace({ definition, account }: { definition: WorkspaceDe
      const knownEmployees = new Map([...(directory ?? []), ...boot.employees].map(person => [person.id, person]));
      for (const row of display?.items ?? []) knownEmployees.set(row.assignee.id, row.assignee);
      setBootstrap({ ...boot, employees: [...knownEmployees.values()] });
-     if (dashboard && active) setDashboardData(dashboard);
-     else if (reuseExecutiveMetrics && data && active) setDashboardData(previous => ({ ...previous, employees: previous.employees.map(person => person.id === employee ? { ...person, ...data.summary } : person) }));
+      if (dashboard && active) setDashboardData(dashboard);
+      else if (reuseExecutiveMetrics && data && active) setDashboardData(previous => ({ ...previous, employees: previous.employees.map(person => person.id === employee ? { ...person, ...data.summary } : person) }));
+      if (taskData && active) setTaskItems(taskData.items);
    } catch (e) { if (active) setError(e instanceof Error ? e.message : "Unable to load workspace."); }
    finally { if (active) setLoading(false); }
   })();
@@ -144,7 +148,7 @@ export function WorkWorkspace({ definition, account }: { definition: WorkspaceDe
    {bootstrap?.mode === "LIVE" && bootstrap.writes_enabled === false && <div role="status" className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">Work items are available for viewing. Changes are not enabled for this account.</div>}
  {error && <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-4"><div className="flex items-start gap-2"><CircleAlert className="mt-0.5 size-5 shrink-0 text-destructive" /><div><h2 className="font-medium">Workspace unavailable</h2><p className="mt-1 text-sm">{error}</p><Button variant="outline" size="sm" className="mt-3" onClick={refresh}>Retry</Button></div></div></div>}
  {!error && <>{loading && !summary ? <div role="status" className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[0, 1, 2, 3].map(i => <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />)}<span className="sr-only">Loading workspace</span></div> : summary && <Stats summary={summary} label={definition.progressLabel ?? "Submission progress"} />}
- {Overview && view === "All Tasks" && <Overview bootstrap={bootstrap} rows={filtered} onCreate={() => setForm("new")} onOpen={setSelected} />}
+  {Overview && view === "All Tasks" && <Overview bootstrap={bootstrap} rows={filtered} tasks={taskItems} onCreate={() => setForm("new")} onOpen={setSelected} />}
   {executiveDirectory && <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-2"><Button size="icon" variant="outline" aria-label="Previous period" onClick={() => navigate(-1)}><ChevronLeft className="size-4" /></Button><Button size="icon" variant="outline" aria-label="Next period" onClick={() => navigate(1)}><ChevronRight className="size-4" /></Button><Button variant="outline" onClick={() => { setDate(localDate(new Date())); setPage(1); }}>Today</Button><label><span className="sr-only">Reporting date</span><input aria-label="Reporting date" type="date" className={selectClass} value={date} onChange={e => { if (e.target.value) { setDate(e.target.value); setPage(1); } }} /></label></div><span className="text-sm font-medium">{format(anchor, "MMMM yyyy")}</span></div>}
   {Dashboard && <Dashboard data={dashboardData} selectedEmployee={employee} periodLabel={`${from} – ${to}`} onSelectEmployee={id => { setEmployee(id); setPage(1); }} onClearEmployee={() => { setEmployee(""); setPage(1); }} />}
   {!executiveDirectory && <Card><CardContent className="space-y-4 p-3 md:p-5">
@@ -186,8 +190,8 @@ function DetailPanel({ id, api, workspace, employees, onClose, onChanged, onEdit
  useEffect(() => { if (action !== "cancel-occurrence") return; let active = true; api<typeof cancelTargets>(`occurrences/${id}/cancel-targets`).then(targets => { if (!active) return; setCancelTargets(targets); setCancelTargetId(targets.find(target => target.id === id && target.selectable)?.id ?? targets.find(target => target.selectable)?.id ?? ""); }).catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load assignees for cancellation."); }); return () => { active = false; };
  }, [action, api, id]);
  useEffect(() => { const t = setInterval(async () => { try { const d = await api<Detail>(`occurrences/${id}`); if (detail && (d.row_version !== detail.row_version || d.task.revision_number !== detail.task.revision_number)) setChanged(true); } catch { /* User-triggered refresh surfaces errors without clearing drafts. */ } }, 15000); return () => clearInterval(t); }, [api, id, detail]);
- const mutate = async (path: string, body: unknown, method = "POST") => {
-  setBusy(true); setError(""); try { await api(path, { method, headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(body) }); await reload(); onChanged(); return true; } catch (e) { setError(e instanceof Error ? e.message : "Command failed."); return false; } finally { setBusy(false); }
+  const mutate = async (path: string, body: unknown, method = "POST") => {
+   setBusy(true); setError(""); try { await api(path, { method, headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(body) }); await reload(); onChanged(); workMutationSuccess(path, method); return true; } catch (e) { setError(e instanceof Error ? e.message : "Command failed."); workMutationError(e, "Command failed."); return false; } finally { setBusy(false); }
  };
  const submission = useSubmission({ detail, api, onBusyChange: setBusy, onError: setError, onSubmitted: async () => { await reload(); onChanged(); setTab("Versions"); } });
  const name = (id: string) => employees.find(e => e.id === id)?.name ?? `Employee ${id}`;

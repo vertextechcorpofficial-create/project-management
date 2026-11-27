@@ -20,6 +20,7 @@ import { SubmissionBin } from "./SubmissionBin";
 import { useSubmission } from "./useSubmission";
 import { TaskForm } from "./TaskForm";
 import { frequencyLabels, selectClass } from "./presentation";
+import { workMutationError, workMutationSuccess } from "../toast-feedback";
 
 const BASE = "/api/project-management/work-management/assignee";
 const dateTime = (date: string) => new Intl.DateTimeFormat("en-PH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Manila" }).format(new Date(date));
@@ -182,8 +183,8 @@ function DetailPanel({ id, api, workspace, employees, onClose, onChanged, onEdit
  const reload = useCallback(async () => { const d = await api<Detail>(`occurrences/${id}`); setDetail(d); setChanged(false); }, [api, id]);
  useEffect(() => { let active = true; api<Detail>(`occurrences/${id}`).then(d => { if (active) setDetail(d); }).catch(e => { if (active) setError(String(e)); }); return () => { active = false; }; }, [api, id]);
  useEffect(() => { const t = setInterval(async () => { try { const d = await api<Detail>(`occurrences/${id}`); if (detail && (d.row_version !== detail.row_version || d.task.revision_number !== detail.task.revision_number)) setChanged(true); } catch { /* User-triggered refresh surfaces errors without clearing drafts. */ } }, 15000); return () => clearInterval(t); }, [api, id, detail]);
- const mutate = async (path: string, body: unknown, method = "POST") => {
-  setBusy(true); setError(""); try { await api(path, { method, headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(body) }); await reload(); onChanged(); return true; } catch (e) { setError(e instanceof Error ? e.message : "Command failed."); return false; } finally { setBusy(false); }
+  const mutate = async (path: string, body: unknown, method = "POST") => {
+   setBusy(true); setError(""); try { await api(path, { method, headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(body) }); await reload(); onChanged(); workMutationSuccess(path, method); return true; } catch (e) { setError(e instanceof Error ? e.message : "Command failed."); workMutationError(e, "Command failed."); return false; } finally { setBusy(false); }
  };
  const submission = useSubmission({ detail, api, onBusyChange: setBusy, onError: setError, onSubmitted: async () => { await reload(); onChanged(); setTab("Versions"); } });
  const name = (id: string) => employees.find(e => e.id === id)?.name ?? `Employee ${id}`;

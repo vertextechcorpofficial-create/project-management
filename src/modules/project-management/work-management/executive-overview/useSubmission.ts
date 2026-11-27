@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { Detail, WorkFile } from "./types";
 import type { WorkApi } from "./workspace-types";
+import { workMutationError, workMutationSuccess } from "../toast-feedback";
 
 interface Options {
  detail: Detail | null;
@@ -36,8 +37,9 @@ export function useSubmission({ detail, api, onBusyChange, onError, onSubmitted 
      body: JSON.stringify({ file_upload_ids: ids, remark, revision_reason: "", expected_revision: detail.row_version }),
    });
     pending.current = null; setFiles([]); setRemark("");
-   await onSubmitted();
-  } catch (error) { onError(error instanceof Error ? error.message : "Submission failed."); }
+    await onSubmitted();
+    workMutationSuccess(`occurrences/${detail.id}/submissions`, "POST");
+   } catch (error) { onError(error instanceof Error ? error.message : "Submission failed."); workMutationError(error, "Submission failed."); }
   finally { onBusyChange(false); }
  };
   return { files, setFiles, remark, setRemark, submit };

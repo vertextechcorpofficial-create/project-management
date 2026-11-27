@@ -37,7 +37,8 @@ export function resolveWorkspaceReadAccess(source: AccessSource): { workspaces: 
   for (const rawPath of source.grantedModulePaths) {
    const path = rawPath.trim().replace(/\/+$/, "");
    // A generic parent-module grant is NOT an executive/global-work capability.
-   if ([workspacePath("assignor"), `${ROOT}/assignor`].includes(path)) access.add("assignor");
+    if ([workspacePath("assignor"), `${ROOT}/assignor`].includes(path)) access.add("assignor");
+    if (`${ROOT}/global-assignment-center` === path) access.add("assignor");
    if ([workspacePath("executive"), `${ROOT}/executive`].includes(path)) access.add("executive");
     if ([workspacePath("departmental"), `${ROOT}/departmental-overview`].includes(path)) access.add("departmental");
  }
