@@ -7,6 +7,7 @@ import type { WorkApi } from "./workspace-types";
 import { assignmentAvailability } from "./availability";
 import { validateTaskTiming } from "./task-timing";
 import { workMutationError, workMutationSuccess } from "../toast-feedback";
+import { randomUUID } from "../shared/random-uuid";
 
 export function useTaskForm({ task, bootstrap, api, onSaved }: {
  task: Task | null; bootstrap: Bootstrap; api: WorkApi; onSaved: () => void;
@@ -56,7 +57,7 @@ export function useTaskForm({ task, bootstrap, api, onSaved }: {
     ...(task ? { expected_revision: task.revision_number, reason } : {}),
    };
    const body = JSON.stringify(payload);
-   if (!request.current || request.current.body !== body) request.current = { key: crypto.randomUUID(), body };
+   if (!request.current || request.current.body !== body) request.current = { key: randomUUID(), body };
     await api(task ? `tasks/${task.id}` : "tasks", { method: task ? "PATCH" : "POST", headers: { "Idempotency-Key": request.current.key }, body });
     request.current = null;
     workMutationSuccess(task ? `tasks/${task.id}` : "tasks", task ? "PATCH" : "POST");

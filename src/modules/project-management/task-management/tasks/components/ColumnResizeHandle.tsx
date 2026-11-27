@@ -45,6 +45,18 @@ export interface ColumnResizeHandleProps {
     readonly onResize: (columnKey: string, width: number) => void;
     /** Called once on release / keyboard nudge with the final width, so the parent can persist it. */
     readonly onResizeCommit: (columnKey: string, width: number) => void;
+    /**
+     * Whether the strip joins the tab order. The header handle does — it is the keyboard path to
+     * resizing. A handle repeated inside body cells does not: one tab stop per cell per row would
+     * bury every other control in the table.
+     */
+    readonly isKeyboardReachable?: boolean;
+    /**
+     * `header` draws the column edge as a short stub, visible at rest — the discoverable way in.
+     * `cell` draws it full height but ONLY on hover or while dragging, so the body gains no new
+     * permanent rules between columns.
+     */
+    readonly tone?: "header" | "cell";
 }
 
 /** The live drag: the pointer captured, where it started, and the last width it proposed. */
@@ -62,6 +74,8 @@ export function ColumnResizeHandle({
     minWidth,
     onResize,
     onResizeCommit,
+    isKeyboardReachable = true,
+    tone = "header",
 }: ColumnResizeHandleProps) {
     const dragRef = useRef<ResizeDrag | null>(null);
     const [isDragging, setIsDragging] = useState(false);
@@ -153,7 +167,7 @@ export function ColumnResizeHandle({
             aria-label={`Resize ${label} column`}
             aria-valuenow={Math.round(width)}
             aria-valuemin={minWidth}
-            tabIndex={0}
+            tabIndex={isKeyboardReachable ? 0 : -1}
             title={`Drag to resize the ${label} column`}
             data-slot="task-column-resize"
             data-column-key={columnKey}
@@ -166,12 +180,22 @@ export function ColumnResizeHandle({
             onKeyDown={handleKeyDown}
             className="group/handle absolute inset-y-0 right-0 z-10 flex w-2 cursor-col-resize touch-none select-none items-center justify-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         >
-            {/* A hairline divider that reads as the column edge; it brightens on hover and while dragging. */}
+            {/* Header: the column edge as a short stub, so the boundary reads as grabbable without
+                drawing a second rule down the table. Cell: full height, but only while the pointer or
+                focus is on it. */}
             <span
                 aria-hidden="true"
                 className={cn(
-                    "h-4 w-px rounded-full transition-colors",
-                    isDragging ? "bg-primary" : "bg-border group-hover/handle:bg-primary",
+                    "rounded-full transition-all",
+                    tone === "header"
+                        ? cn(
+                              "h-4 w-px",
+                              isDragging ? "bg-primary" : "bg-border group-hover/handle:bg-primary",
+                          )
+                        : cn(
+                              "h-full w-0.5 bg-primary",
+                              isDragging ? "opacity-100" : "opacity-0 group-hover/handle:opacity-100",
+                          ),
                 )}
             />
         </div>

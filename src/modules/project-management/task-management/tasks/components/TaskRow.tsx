@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import { useCallback, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
+import { ChevronRight, Pencil, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,10 +100,45 @@ export const MAX_INDENT_DEPTH = 8;
  * the level step legible. The step is a runtime number and stays an INLINE STYLE (see the padding
  * application below); it can never be a Tailwind class.
  *
- * At the `MAX_INDENT_DEPTH` cap this is 8 × 32 = 256px, past the title column's 220px default; that
- * only reaches the deepest levels, whose gutter is deliberately frozen at the cap.
+ * Deep levels step the full amount until the leading group plus a readable stub of the name fills
+ * the cell: the indent is clamped against `TITLE_CHROME_PX + TITLE_MIN_TEXT_PX`, not against a share
+ * of the column, so two rows at one level share an x and a wide column keeps stepping instead of
+ * freezing early. Past that point the icon pins and the name keeps its stub — the row never spills
+ * into the next column, and the level step stops rather than the text vanishing.
  */
-export const INDENT_STEP_PX = 32;
+export const INDENT_STEP_PX = 26;
+
+/**
+ * The gutter the grip lives in, left of the row's leading glyph, in pixels.
+ *
+ * Every row reserves it, so the grip never sits against the cell edge at depth 0 and never drifts
+ * with depth: it is always the same distance from the first thing the row draws.
+ */
+export const GRIP_GUTTER_PX = 18;
+
+/**
+ * Breathing room between the cell's left edge and the row's first pixel of content, in pixels.
+ *
+ * Depth 0 has no indent of its own, so without this a top-level name sits flush against the column
+ * border while every child has room to breathe. It is added to the indent, not folded into the grip
+ * gutter, because the grip must stay a fixed distance from the glyph it precedes.
+ */
+export const TITLE_LEFT_PAD_PX = 8;
+
+/**
+ * The leading group a row draws before its name, in pixels: the 24px chevron slot, its 6px gap, the
+ * 24px subtask-count slot, its 6px gap, and the 16px status glyph, with the last 6px gap left out
+ * because the name's own truncation absorbs it.
+ */
+export const TITLE_CHROME_PX = 76;
+
+/**
+ * The name space the indent must leave behind before it stops, in pixels — roughly a dozen
+ * characters at the title's 14px medium weight (≈7px each). Without it a deep row's glyph would pin
+ * against the border and the name would collapse to nothing, which reads as a broken row rather than
+ * as a deep one.
+ */
+export const TITLE_MIN_TEXT_PX = 84;
 
 /**
  * A `YYYY-MM-DD` task date as long-form display text.
@@ -211,10 +246,26 @@ export interface TaskRowProps {
     /** Number of siblings at this node's level (`aria-setsize`), taken from the full tree. */
     setSize: number;
     hasChildren: boolean;
+    /**
+     * Subtasks this row owns that the active filter is holding back. Non-zero means the chevron is
+     * still drawn — a matched parent must be openable — and the badge counts these instead of the
+     * children actually in the pruned node.
+     */
+    hiddenChildCount?: number;
     isExpanded: boolean;
+    /**
+     * True when the row is on-screen only as the ancestor path of a match beneath it. A filter never
+     * turns a match into its subtree, so a dimmed row is context: kept for the hierarchy, not a hit.
+     */
+    isContext?: boolean;
     onToggleExpand: (id: number) => void;
     /** Slot for the row's overflow menu / actions. */
     actions?: ReactNode;
+    /**
+     * Draws the column-resize strip inside a body cell, the twin of the one in the header. Supplied
+     * by `TaskTree`, which owns the width store; absent in a fixture render, where nothing resizes.
+     */
+    renderColumnResizeHandle?: (columnKey: string) => ReactNode;
     /**
      * The frozen-column `left` offsets, when the wide table is pinning its leading columns. Absent
      * for a plain render (a fixture, a preview), which leaves the row exactly as it was: the two
@@ -244,6 +295,36 @@ export interface TaskRowProps {
      * stack — the same rule the assignees cell follows.
      */
     onEditTags?: (taskId: number) => void;
+    /**
+     * Opens the new-subtask dialog for this row, so a child is one click from the name instead of a
+     * trip through the sheet. Absent (or `can_edit: false`) renders no `+` control.
+     */
+    onAddSubtask?: (taskId: number) => void;
+    /**
+     * The dnd-kit handle, supplied by the sortable wrapper. Kept as a slot so the row itself stays
+     * presentational and never imports drag machinery — a row rendered without it is still a row.
+     */
+    dragHandle?: ReactNode;
+    /** Forwarded to the `<tr>` so the sortable wrapper can measure and transform it. */
+    rowRef?: Ref<HTMLTableRowElement>;
+    /** Inline transform/transition from `useSortable`; empty for a plain render. */
+    rowStyle?: CSSProperties;
+    /** Drag-state classes merged onto the row — the row supplies nothing itself. */
+    rowClassName?: string;
+    /**
+     * The drag activator's listeners, supplied by the sortable wrapper and spread on the `<tr>`.
+     *
+     * The WHOLE ROW is the activator on purpose: the user grabs the task name they are already
+     * looking at, instead of aiming at a small grip in a gutter. Spread before the row's own
+     * `role`/`aria-*` so the row keeps announcing itself as a row after a screen reader is told
+     * "press space to pick up".
+     */
+    rowListeners?: HTMLAttributes<HTMLTableRowElement>;
+    /**
+     * The drop line this row carries, and which edge of it the line sits on. `null` on every row a
+     * drag is not pointing into. One line, not a marker per intent: its distance from the left edge IS
+     * the level a drop applies, so "where" and "how deep" are read from the same mark.
+     */
 }
 
 /**
@@ -265,9 +346,12 @@ export function TaskRow({
     posInSet,
     setSize,
     hasChildren,
+    hiddenChildCount = 0,
     isExpanded,
+    isContext = false,
     onToggleExpand,
     actions,
+    renderColumnResizeHandle,
     frozenColumns,
     fields = [],
     catalogs,
@@ -277,12 +361,26 @@ export function TaskRow({
     onCancelCellEdit,
     onCommitCellEdit,
     onEditTags,
+    onAddSubtask,
+    dragHandle,
+    rowRef,
+    rowStyle,
+    rowClassName,
+    rowListeners,
 }: TaskRowProps) {
     const indentDepth = Math.min(node.depth, MAX_INDENT_DEPTH);
-    const subtaskCount = node.children.length;
-    const subtaskLabel = `${subtaskCount} sub-task${subtaskCount === 1 ? "" : "s"}`;
-    const expandLabel = isExpanded ? `Collapse ${node.title}` : `Expand ${node.title}`;
-    const expandFrozenLeft = frozenColumns?.expand;
+    // A filtered row can hold subtasks the pruner removed, so the badge and the chevron count the
+    // real ones; without that a matched parent reads as a leaf and cannot be opened at all.
+    const subtaskCount = node.children.length > 0 ? node.children.length : hiddenChildCount;
+    const isHoldingHidden = node.children.length === 0 && hiddenChildCount > 0;
+    const subtaskLabel = `${subtaskCount} sub-task${subtaskCount === 1 ? "" : "s"}${
+        isHoldingHidden ? " hidden by the filter" : ""
+    }`;
+    const expandLabel = isExpanded
+        ? `Collapse ${node.title}`
+        : isHoldingHidden
+          ? `Show ${subtaskLabel} of ${node.title}`
+          : `Expand ${node.title}`;
     const titleFrozenLeft = frozenColumns?.title;
 
     const patchFor = useCallback(
@@ -325,8 +423,27 @@ export function TaskRow({
         [onCommitCellEdit, node.id],
     );
 
+    /*
+     * The grip is the same element in both positions: before the chevron when the row has children,
+     * before the status glyph when it does not. Zero-width so it never moves content, drawn 18px to
+     * the left of whatever it precedes, which is what keeps its distance constant.
+     */
+    const gripSlot =
+        dragHandle === undefined ? null : (
+            <span
+                aria-hidden="true"
+                className="relative -mr-1.5 w-0 shrink-0 opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100"
+            >
+                <span className="pointer-events-auto absolute top-1/2 -translate-x-[18px] -translate-y-1/2">
+                    {dragHandle}
+                </span>
+            </span>
+        );
     return (
         <TableRow
+            {...rowListeners}
+            ref={rowRef}
+            style={rowStyle}
             role="row"
             data-slot="task-tree-row"
             data-task-id={node.id}
@@ -336,13 +453,34 @@ export function TaskRow({
             aria-posinset={posInSet}
             aria-setsize={setSize}
             aria-expanded={hasChildren ? isExpanded : undefined}
-            className="group"
+            className={cn("group/row relative", rowClassName)}
         >
             <TableCell
-                style={expandFrozenLeft === undefined ? undefined : { left: expandFrozenLeft }}
-                className={expandFrozenLeft === undefined ? undefined : FROZEN_BODY_CELL_CLASS}
+                data-slot="task-title-cell"
+                style={titleFrozenLeft === undefined ? undefined : { left: titleFrozenLeft }}
+                className={cn(
+                    "relative",
+                    titleFrozenLeft === undefined
+                        ? undefined
+                        : cn(FROZEN_BODY_CELL_CLASS, FROZEN_EDGE_CLASS),
+                )}
             >
-                <div className="flex items-center gap-1">
+                <div
+                    className={cn(
+                        "relative flex items-center gap-1.5",
+                        isContext ? "text-muted-foreground" : undefined,
+                    )}
+                    style={{
+                        paddingLeft: `min(${indentDepth * INDENT_STEP_PX + GRIP_GUTTER_PX + TITLE_LEFT_PAD_PX}px, max(0px, calc(100% - ${TITLE_CHROME_PX + TITLE_MIN_TEXT_PX}px)))`,
+                    }}
+                >
+                    {/*
+                     * The expander travels WITH the name, not in a fixed gutter: a deep row's chevron
+                     * used to sit far left of its own title, which made the level step unreadable and
+                     * left the reader clicking a control disconnected from its row. A leaf reserves
+                     * the same 24px so siblings at one level still share a baseline.
+                     */}
+                    {hasChildren ? gripSlot : null}
                     {hasChildren ? (
                         <Button
                             type="button"
@@ -363,24 +501,11 @@ export function TaskRow({
                     ) : (
                         <span className="size-6 shrink-0" aria-hidden="true" />
                     )}
-                </div>
-            </TableCell>
-
-            <TableCell
-                style={titleFrozenLeft === undefined ? undefined : { left: titleFrozenLeft }}
-                className={
-                    titleFrozenLeft === undefined
-                        ? undefined
-                        : cn(FROZEN_BODY_CELL_CLASS, FROZEN_EDGE_CLASS)
-                }
-            >
-                <div className="flex items-center gap-1.5" style={{ paddingLeft: indentDepth * INDENT_STEP_PX }}>
                     {/*
-                     * The subtask-count badge leads the title cell, before the status glyph. It used
+                     * The subtask-count badge follows the chevron, before the status glyph. It used
                      * to trail the title, where its position followed the resizable title column's
                      * width; anchored here it stays with the row's identity whatever the other
-                     * columns are dragged to. Order: chevron (previous cell), badge,
-                     * status glyph, title.
+                     * columns are dragged to. Order: chevron, badge, status glyph, title.
                      *
                      * The badge sits in a reserved fixed-width slot on EVERY row, not only the rows
                      * that own one. A parent's leading group is [count][status][title] while a leaf's
@@ -408,7 +533,8 @@ export function TaskRow({
                      * shift the title. `density="dense"` holds the 20px row and the title truncates
                      * against the column's own width, so widening the column reveals more of it.
                      */}
-                    {status !== null ? (
+                                        {hasChildren ? null : gripSlot}
+{status !== null ? (
                         <CatalogStatusIcon
                             icon={status.icon}
                             color={status.color}
@@ -426,23 +552,58 @@ export function TaskRow({
                                 onCancel={cancelEdit}
                             />
                         </div>
-                    ) : editable ? (
-                        <button
-                            type="button"
-                            aria-label={`Edit title for ${title}`}
-                            title={`Edit title for ${title}`}
-                            data-slot="task-cell-edit"
-                            className={cn(CELL_BUTTON_CLASS, "min-w-0 font-medium")}
-                            onClick={() => startEdit("title")}
-                        >
-                            <span className="block max-w-full truncate">{title}</span>
-                        </button>
                     ) : (
-                        <span className="block max-w-full truncate font-medium" title={title}>
-                            {title}
-                        </span>
+                        /*
+                         * The name is text, not a control: renaming moved to the pencil beside it, and
+                         * the row carries two hover affordances in one reserved strip so the title's
+                         * truncation point does not jump between hover and rest. Hidden by opacity
+                         * rather than unmounted, so tabbing to either button reveals the strip
+                         * (`group-focus-within/row`) without a layout shift on mouse-over.
+                         */
+                        <>
+                            <span className="min-w-0 flex-1 truncate font-medium" title={title}>
+                                {title}
+                            </span>
+                            {editable ? (
+                                /*
+                                 * Pinned to the cell's trailing edge, not stacked after the name:
+                                 * the strip used to hold 52px of layout width even while invisible,
+                                 * which at a narrow title column left a deep row with no room to
+                                 * print its own name. Out of flow it costs the title nothing.
+                                 */
+                                <span className="pointer-events-none absolute top-1/2 right-2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-full bg-secondary px-1.5 py-0.5 opacity-0 ring-1 ring-border/70 shadow-sm transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+                                    {onAddSubtask ? (
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-xs"
+                                            aria-label={`Add subtask to ${title}`}
+                                            title="Add subtask"
+                                            data-slot="task-row-add-subtask"
+                                            className="rounded-full bg-primary/10 text-primary transition-[transform,background-color,box-shadow,color] duration-150 hover:-translate-y-px hover:bg-primary/20 hover:shadow-sm active:translate-y-0 active:scale-90 active:bg-primary/25"
+                                            onClick={() => onAddSubtask(node.id)}
+                                        >
+                                            <Plus className="size-3.5" aria-hidden="true" />
+                                        </Button>
+                                    ) : null}
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        aria-label={`Edit title for ${title}`}
+                                        title={`Edit title for ${title}`}
+                                        data-slot="task-row-edit-title"
+                                        className="rounded-full text-muted-foreground transition-[transform,background-color,box-shadow,color] duration-150 hover:-translate-y-px hover:bg-muted hover:text-foreground hover:shadow-sm active:translate-y-0 active:scale-90"
+                                        onClick={() => startEdit("title")}
+                                    >
+                                        <Pencil className="size-3.5" aria-hidden="true" />
+                                    </Button>
+                                </span>
+                            ) : null}
+                        </>
                     )}
                 </div>
+                {renderColumnResizeHandle?.("title")}
             </TableCell>
 
             {/*

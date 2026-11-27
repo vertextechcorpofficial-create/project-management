@@ -17,7 +17,7 @@
 // @ts-expect-error -- Node >= 22.15 exports `registerHooks`; the pinned @types/node (20.x) predates it.
 import { registerHooks } from "node:module";
 // @ts-expect-error -- Node requires the ".ts" extension here; tsc forbids it (see the file header).
-import { containsExactlyOnce, isCompletePostMoveChildSet, type MoveChildRow } from "./task-move-rules.ts";
+import { containsExactlyOnce, isCompletePostMoveChildSet, scopeToMoveList, type MoveChildRow } from "./task-move-rules.ts";
 // @ts-expect-error -- Node requires the ".ts" extension here; tsc forbids it (see the file header).
 import { TASK_ACTIVITY_CUSTOM_FIELD_KEY, TASK_ACTIVITY_FIELD_LABELS, buildActivityChange, buildTaskActivityDeltas, catalogLabelOf, formatActivityValue, hasActivityChanged, joinUserDisplayName, type TaskActivityChange } from "./task-activity-delta.ts";
 // @ts-expect-error -- Node requires the ".ts" extension here; tsc forbids it (see the file header).
@@ -80,6 +80,37 @@ check(
 check(
     "a move to root refuses a list that omits a root",
     !isCompletePostMoveChildSet(rows, 3, null, [1, 3]),
+);
+
+// --- One list at a time ------------------------------------------------------------------------------
+// `sort_order` is per list, so a root is `parent_id: null` IN THAT LIST. The department also holds
+// rows of another list (ids 50-51), and demanding their roots is what broke "promote to top level":
+// the client can only send the roots it renders, and it renders one list.
+const departmentRows: MoveChildRow[] = [
+    { id: 1, parent_id: null, list_id: 4 },
+    { id: 2, parent_id: 1, list_id: 4 },
+    { id: 3, parent_id: 1, list_id: 4 },
+    { id: 5, parent_id: null, list_id: 4 },
+    { id: 50, parent_id: null, list_id: 8 },
+    { id: 51, parent_id: 50, list_id: 8 },
+];
+const listFourRows = scopeToMoveList(departmentRows, 4);
+check("scoping keeps only the moved task's list", listFourRows.every((row) => row.list_id === 4) && listFourRows.length === 4);
+check(
+    "unscoped, a promotion to root is refused because another list's roots are missing",
+    !isCompletePostMoveChildSet(departmentRows, 3, null, [1, 3, 5]),
+);
+check(
+    "scoped to the task's own list, the same promotion is accepted",
+    isCompletePostMoveChildSet(listFourRows, 3, null, [1, 3, 5]),
+);
+check(
+    "scoping still refuses a list that omits a root of that same list",
+    !isCompletePostMoveChildSet(listFourRows, 3, null, [1, 3]),
+);
+check(
+    "scoping leaves a child move untouched (the parent chain is in the same list)",
+    isCompletePostMoveChildSet(listFourRows, 3, 1, [2, 3]),
 );
 
 // --- Reorder within one parent ----------------------------------------------------------------------

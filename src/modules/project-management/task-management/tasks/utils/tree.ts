@@ -18,6 +18,11 @@ export interface TreeSourceRow {
     readonly id: number;
     readonly parent_id: number | null;
     readonly sort_order: number;
+    /**
+     * The owning list, selected only by callers that need it — the move route scopes its
+     * completeness rule to one list. Optional so callers that never read it stay unchanged.
+     */
+    readonly list_id?: number | null;
 }
 
 /** A row enriched during assembly. `depth` is computed here, never stored in the database. */
@@ -218,41 +223,122 @@ export function flattenVisible<T extends TreeSourceRow>(
     return visible;
 }
 
-/** A copy of `node` and every descendant, so a pruned forest can never alias the source forest. */
-function cloneSubtree<T extends TreeSourceRow>(node: TreeNode<T>): TreeNode<T> {
-    return { ...node, children: node.children.map(cloneSubtree) };
+/** The row rules a pruned forest applies. All are optional. */
+export interface ForestVisibility<T extends TreeSourceRow> {
+    /** The clause set. A row that MATCHES stays; it does NOT bring its subtree with it. */
+    readonly passesClauses?: (row: T) => boolean;
+    /**
+     * A negative clause (`is not X`). A row it excludes is dropped TOGETHER with its whole subtree, so
+     * a hidden branch never leaves its tagless children behind.
+     */
+    readonly failsExcludingClause?: (row: T) => boolean;
+    /** The search term. A hit stays, and so does every ancestor that leads down to it. */
+    readonly matchesSearch?: (row: T) => boolean;
+    /**
+     * A row the user opened under an active filter. Its whole subtree survives, matching or not, so a
+     * hit can be inspected in place instead of the reader dropping the filter to see what is inside
+     * it. An exclusion still applies inside that subtree: `is not` is a verdict on a branch, not a
+     * selection the reader can overrule by expanding.
+     */
+    readonly revealSubtree?: (row: T) => boolean;
 }
 
 /**
- * Prunes a forest to the branches that satisfy `isMatch`.
+ * Keeps everything below a revealed row. Only `is not` still prunes, because it is the one rule that
+ * means "this branch is not the answer" rather than "this row is".
+ */
+function keepRevealedSubtree<T extends TreeSourceRow>(
+    nodes: readonly TreeNode<T>[],
+    excluded: ((row: T) => boolean) | undefined,
+): TreeNode<T>[] {
+    const kept: TreeNode<T>[] = [];
+    for (const node of nodes) {
+        if (excluded !== undefined && excluded(node)) continue;
+        kept.push({ ...node, children: keepRevealedSubtree(node.children, excluded) });
+    }
+    return kept;
+}
+
+/**
+ * Clause half. Two directions, because `is` and `is not` mean opposite things:
  *
- * The rule is applied recursively and is deliberately asymmetric:
- * - a node that MATCHES keeps its ENTIRE subtree — nothing beneath a match is pruned. This is what
- *   lets a user search for a parent and then expand it to work with its real children: the subtask
- *   count stays the parent's true count and the chevron opens onto rows, not onto nothing;
- * - a node that does NOT match is kept only while a descendant matches, and only on the branches
- *   that lead to (or contain) a match — so a deep match is never orphaned by a missing ancestor;
- * - anything else is dropped, so a search that matches nothing returns an empty forest.
+ * - `excluded(node)` drops the node and everything beneath it.
+ * - `passes(node)` selects that node and nothing else. A match does NOT drag its subtree in: a child
+ *   that contradicts the filter must not appear merely because its parent matched.
+ * - A node that does not match survives only as the ancestor path of a match beneath it, so a deep
+ *   hit stays reachable and the hierarchy still reads. Those rows are context, not results.
+ * - `reveal(node)` is the reader's own answer to that: a matched row they opened keeps its real
+ *   subtree, so the branch can be read without abandoning the filter.
+ */
+function pruneByClauses<T extends TreeSourceRow>(
+    nodes: readonly TreeNode<T>[],
+    passes: ((row: T) => boolean) | undefined,
+    excluded: ((row: T) => boolean) | undefined,
+    reveal: ((row: T) => boolean) | undefined,
+): TreeNode<T>[] {
+    const kept: TreeNode<T>[] = [];
+    for (const node of nodes) {
+        if (excluded !== undefined && excluded(node)) continue;
+
+        const accepted = passes === undefined || passes(node);
+        const children =
+            accepted && reveal !== undefined && reveal(node)
+                ? keepRevealedSubtree(node.children, excluded)
+                : pruneByClauses(node.children, passes, excluded, reveal);
+        if (accepted || children.length > 0) kept.push({ ...node, children });
+    }
+    return kept;
+}
+
+/** Search half: a hit stays, plus the ancestors on the way to it — and a hit the reader opened. */
+function pruneBySearch<T extends TreeSourceRow>(
+    nodes: readonly TreeNode<T>[],
+    matches: (row: T) => boolean,
+    reveal: ((row: T) => boolean) | undefined,
+): TreeNode<T>[] {
+    const kept: TreeNode<T>[] = [];
+    for (const node of nodes) {
+        const hit = matches(node);
+        const children =
+            hit && reveal !== undefined && reveal(node)
+                ? [...node.children]
+                : pruneBySearch(node.children, matches, reveal);
+        if (hit || children.length > 0) kept.push({ ...node, children });
+    }
+    return kept;
+}
+
+/**
+ * Prunes a forest to the rows the screen may render — the one rule the List and the Progress tab
+ * share, so the two views cannot drift apart.
+ *
+ * - Clauses select the row and nothing more: `is X` keeps a matching row but not its subtree (a child
+ *   that contradicts the filter stays hidden), while `is not X` drops the offending row and everything
+ *   beneath it — otherwise a tagged parent's tagless children would survive the branch that was
+ *   filtered out.
+ * - A row that does not match is kept only as the ancestor path of a match beneath it, so a deep hit
+ *   stays reachable; such a row is context, and the views render it muted.
+ * - Search reveals UP: a hit stays plus the ancestors leading to it — ancestors are context, not
+ *   matches — and a branch with no hit anywhere beneath it is dropped.
+ * - A hit the reader OPENS (`revealSubtree`) keeps its real subtree, so the branch can be inspected
+ *   without dropping the filter. Revealed rows are context too, never matches.
+ * - Both together: the clause set is applied first, then the search keeps hits inside what survives.
  *
  * Returned nodes are copies (the source forest is untouched) and keep their `depth`, so a kept
  * row's visual indent and `aria-level` do not shift when sibling branches are pruned away.
  *
- * @param nodes   The forest to prune, typically from `buildTree`.
- * @param isMatch The row-level predicate; a match is kept together with its whole subtree.
+ * @param nodes      The forest to prune, typically from `buildTree`.
+ * @param visibility The row rules; omit a rule to apply it as always-true.
  * @returns The pruned forest, preserving the source order at every level.
  */
 export function pruneForest<T extends TreeSourceRow>(
     nodes: readonly TreeNode<T>[],
-    isMatch: (row: T) => boolean,
+    visibility: ForestVisibility<T>,
 ): TreeNode<T>[] {
-    const kept: TreeNode<T>[] = [];
-    for (const node of nodes) {
-        if (isMatch(node)) {
-            kept.push(cloneSubtree(node));
-            continue;
-        }
-        const children = pruneForest(node.children, isMatch);
-        if (children.length > 0) kept.push({ ...node, children });
-    }
-    return kept;
+    const { passesClauses, failsExcludingClause, matchesSearch, revealSubtree } = visibility;
+    const gated =
+        passesClauses === undefined && failsExcludingClause === undefined
+            ? [...nodes]
+            : pruneByClauses(nodes, passesClauses, failsExcludingClause, revealSubtree);
+    return matchesSearch === undefined ? gated : pruneBySearch(gated, matchesSearch, revealSubtree);
 }
