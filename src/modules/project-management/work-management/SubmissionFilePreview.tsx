@@ -1,21 +1,23 @@
 "use client";
+/* eslint-disable @next/next/no-img-element -- blob URLs cannot be optimized by next/image. */
 
 import { FileText } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export function SubmissionFilePreview({ file }: { file: File }) {
-  const [url, setUrl] = useState("");
   const [text, setText] = useState("");
   const isText = file.type.startsWith("text/") || /\.(csv|json|md|log)$/i.test(file.name);
+  const url = useMemo(() => URL.createObjectURL(file), [file]);
 
   useEffect(() => {
-    const objectUrl = URL.createObjectURL(file);
-    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(url);
+  }, [url]);
+  useEffect(() => {
     if (isText) file.text().then(setText).catch(() => setText("Unable to preview this text file."));
-    return () => URL.revokeObjectURL(objectUrl);
   }, [file, isText]);
 
-  if (file.type.startsWith("image/") && url) return <img src={url} alt={`Preview of ${file.name}`} className="max-h-56 max-w-full rounded object-contain" />;
+  // Blob URLs cannot be optimized by next/image.
+  if (file.type.startsWith("image/")) return <img src={url} alt={`Preview of ${file.name}`} className="max-h-56 max-w-full rounded object-contain" />;
   if (file.type === "application/pdf" && url) return <iframe title={`Preview of ${file.name}`} src={url} className="h-56 w-full rounded border" />;
   if (file.type.startsWith("video/") && url) return <video controls src={url} className="max-h-56 max-w-full rounded" />;
   if (file.type.startsWith("audio/") && url) return <audio controls src={url} className="w-full" />;
